@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35931.197 d17.13
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PLCManagement.API", ".\API\PLCManagement.API.csproj", "{A331F92C-79F0-43EB-AE1D-4739C3BBCB0B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PLCManagement.Core", ".\Core\PLCManagement.Core.csproj", "{555A9F15-DE09-417D-8ADF-EE672FD0922B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A331F92C-79F0-43EB-AE1D-4739C3BBCB0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A331F92C-79F0-43EB-AE1D-4739C3BBCB0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A331F92C-79F0-43EB-AE1D-4739C3BBCB0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A331F92C-79F0-43EB-AE1D-4739C3BBCB0B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{555A9F15-DE09-417D-8ADF-EE672FD0922B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{555A9F15-DE09-417D-8ADF-EE672FD0922B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{555A9F15-DE09-417D-8ADF-EE672FD0922B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{555A9F15-DE09-417D-8ADF-EE672FD0922B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {67FC38FC-B71A-400F-BA5D-DD999250A8F9}
+	EndGlobalSection
+EndGlobal

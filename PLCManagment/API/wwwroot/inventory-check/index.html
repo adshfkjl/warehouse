@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>盘点下架操作</title>
+    <link rel="stylesheet" href="./inventory-check.css?v=20260630-3">
+</head>
+<body>
+    <main class="page-shell">
+        <header class="page-header">
+            <div>
+                <h1>盘点下架操作</h1>
+                <p>按立库和 Tray 范围自动下架，查询任务进度，并对已下架货框预约上架。</p>
+            </div>
+            <div id="connectionStatus" class="connection-status idle">未连接任务</div>
+        </header>
+
+        <section class="toolbar" aria-label="盘点操作">
+            <form id="outboundForm" class="panel form-panel">
+                <div class="panel-title">
+                    <h2>开始下架</h2>
+                    <span>Tray 来自 LocationManagements.Tray</span>
+                </div>
+                <div class="form-grid">
+                    <label>
+                        <span>立库编号</span>
+                        <select id="plcId" required>
+                            <option value="A1">A1</option>
+                            <option value="A2">A2</option>
+                            <option value="A3">A3</option>
+                            <option value="A4">A4</option>
+                            <option value="A5">A5</option>
+                            <option value="A6">A6</option>
+                            <option value="A7">A7</option>
+                            <option value="A8">A8</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Tray 起始</span>
+                        <input id="trayStart" type="text" required placeholder="A10-701" autocomplete="off">
+                    </label>
+                    <label>
+                        <span>Tray 结束</span>
+                        <input id="trayEnd" type="text" required placeholder="A10-733" autocomplete="off">
+                    </label>
+                    <button id="startOutboundButton" class="primary-button" type="submit">开始下架</button>
+                </div>
+            </form>
+
+            <form id="queryForm" class="panel query-panel">
+                <div class="panel-title">
+                    <h2>查询任务</h2>
+                    <span>可手动输入任务 ID</span>
+                </div>
+                <div class="query-row">
+                    <input id="taskIdInput" type="number" min="1" placeholder="任务 ID">
+                    <button id="queryButton" class="secondary-button" type="submit">查询</button>
+                    <button id="cancelTaskButton" class="danger-button" type="button" disabled>放弃任务</button>
+                </div>
+            </form>
+        </section>
+
+        <section id="messageArea" class="message-area" hidden></section>
+
+        <section class="summary-grid" aria-label="任务摘要">
+            <div class="summary-card">
+                <span>任务号</span>
+                <strong id="taskNo">--</strong>
+            </div>
+            <div class="summary-card">
+                <span>任务状态</span>
+                <strong id="taskStatus" class="status-badge neutral">--</strong>
+            </div>
+            <div class="summary-card">
+                <span>总数</span>
+                <strong id="totalCount">0</strong>
+            </div>
+            <div class="summary-card">
+                <span>成功</span>
+                <strong id="successCount">0</strong>
+            </div>
+            <div class="summary-card">
+                <span>失败</span>
+                <strong id="failedCount">0</strong>
+            </div>
+        </section>
+
+        <section class="panel detail-panel">
+            <div class="panel-title detail-title">
+                <div>
+                    <h2>任务明细</h2>
+                    <span id="taskMessage">暂无任务</span>
+                </div>
+                <div id="taskRange" class="task-range">--</div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tray</th>
+                            <th>货架</th>
+                            <th>储位</th>
+                            <th>装载点</th>
+                            <th>下架状态</th>
+                            <th>下架消息</th>
+                            <th>上架状态</th>
+                            <th>上架消息</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="itemsBody">
+                        <tr>
+                            <td colspan="9" class="empty-row">暂无数据</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="./inventory-check.js?v=20260630-3"></script>
+</body>
+</html>
