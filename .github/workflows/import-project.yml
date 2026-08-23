@@ -1,0 +1,29 @@
+name: Import project source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - project-source.zip
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and commit project
+        shell: bash
+        run: |
+          if [ ! -f project-source.zip ]; then
+            exit 0
+          fi
+          unzip -q -o project-source.zip -d .
+          rm project-source.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Import project source"
+          git push
