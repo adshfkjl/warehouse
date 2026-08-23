@@ -1,0 +1,30 @@
+# Visual Studio / .NET build output
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Restored dependencies
+packages/
+
+# Runtime data
+*.log
+logs/
+log-*.txt
+
+# Local configuration containing credentials
+PLCManagment/API/appsettings.json
+PLCManagment/API/appsettings.*.json
+!PLCManagment/API/appsettings.example.json
+PlcManagementService/App.config
+!PlcManagementService/App.example.config
+
+# Local archives / backups
+*.zip
+
+# OS metadata
+Thumbs.db
+.DS_Store
