@@ -289,13 +289,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.DeviceGateway/Simulation/SimulationScenario.cs`
 - Test: `tests/Warehouse.DeviceGateway.ContractTests/SimulatedDeviceGatewayTests.cs`
 
-- [ ] 支持可配置延迟、成功、失败、离线、超时、报警、重复请求和服务重启恢复。
-- [ ] 模拟器必须先记录命令幂等键，再返回结果，重复命令不能产生第二次物理动作。
-- [ ] 模拟停止流程返回 `StopConfirmed`、`StopFailed` 或 `PhysicalStateUnknown`；未下发命令由 WMS 直接取消。
-- [ ] 模拟器分别覆盖“支持任务号去重/查询”和“不支持任务号去重/查询”两种设备能力。
-- [ ] 编写每个结果的契约测试并运行测试项目。
+- [x] 支持可配置延迟、成功、失败、离线、超时、报警、重复请求和服务重启恢复。
+- [x] 模拟器必须先记录命令幂等键，再返回结果；具备任务号去重能力时重复命令不能产生第二次物理动作。
+- [x] 模拟停止流程返回 `StopConfirmed`、`StopFailed` 或 `PhysicalStateUnknown`；未下发命令由 WMS 直接取消。
+- [x] 模拟器分别覆盖“支持任务号去重/查询”和“不支持任务号去重/查询”两种设备能力。
+- [x] 编写每个结果的契约测试并运行测试项目。
 
 **验收:** `AGENT_VERIFIED`；无真实 PLC 可以稳定复现成功、失败、超时和未知结果。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.DeviceGateway/Simulation/SimulationScenario.cs`、`src/Warehouse.DeviceGateway/SimulatedDeviceGateway.cs`、项目引用和 `tests/Warehouse.DeviceGateway.ContractTests/SimulatedDeviceGatewayTests.cs`，并同步设计书和计划。
+- TDD：先添加模拟网关契约测试，因实现类型缺失而失败；实现后先通过 18 个基础场景测试，再补充无去重、无查询和无停止能力的失败测试并修正实现，最终契约测试 21 个通过。
+- 验证：`dotnet restore Warehouse.Wms.sln`（退出码 0）；`dotnet build Warehouse.Wms.sln --no-restore`（退出码 0，0 警告、0 错误）；`dotnet test Warehouse.Wms.sln --no-build --no-restore`（退出码 0，DeviceGateway 21、Unit 5 通过，集成测试程序集当前无测试）；`dotnet list Warehouse.Wms.sln package --vulnerable`（退出码 0，未发现漏洞）；未连接 PLC、ERP 或数据库；旧 `warehouse/` 目录未修改。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（模拟结果和停止语义待负责人确认）；`FIELD_PENDING`（真实设备能力、任务号去重/查询、停止和恢复未验证）。
+- 已知风险：模拟器状态为进程内共享存储，真实 WMS 的持久化幂等、Outbox/Inbox 和重启对账由后续任务实现；模拟器不代表旧 PLC 的现场能力。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 2.3：实现旧 PLC API 适配器
 
