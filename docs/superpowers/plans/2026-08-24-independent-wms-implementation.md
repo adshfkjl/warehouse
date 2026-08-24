@@ -262,15 +262,25 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Application/Devices/IWarehouseDeviceGateway.cs`
 - Test: `tests/Warehouse.DeviceGateway.ContractTests/DeviceTaskContractTests.cs`
 
-- [ ] 定义 `SubmitInboundAsync`、`SubmitOutboundAsync`、`SubmitTransferAsync`、`GetStatusAsync` 和 `TestConnectionAsync`。
-- [ ] 请求必须包含幂等键、WMS 任务号、设备编号、源/目标库位、装载点和协议版本。
-- [ ] 设备结果必须区分 `Accepted`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Offline`、`Unknown`。
-- [ ] 将设备接口方法命名为 `RequestStopAsync`；未下发任务的业务取消由 WMS 状态机处理，不调用设备停止。
-- [ ] 定义 `DeviceCapability`：`TaskKeyDeduplication`、`TaskQuery`、`StopControl`、`CompletionCallback`。
-- [ ] 定义设备结果观察对象，包含设备任务号、结果版本、来源（`Polling`/`Callback`）和观测时间。
-- [ ] 为重复提交、超时、离线和未知结果写失败测试，再实现最小契约。
+- [x] 定义 `SubmitInboundAsync`、`SubmitOutboundAsync`、`SubmitTransferAsync`、`GetStatusAsync` 和 `TestConnectionAsync`。
+- [x] 请求必须包含幂等键、WMS 任务号、设备编号、源/目标库位、装载点和协议版本。
+- [x] 设备结果必须区分 `Accepted`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Offline`、`Unknown`。
+- [x] 将设备接口方法命名为 `RequestStopAsync`；未下发任务的业务取消由 WMS 状态机处理，不调用设备停止。
+- [x] 定义 `DeviceCapability`：`TaskKeyDeduplication`、`TaskQuery`、`StopControl`、`CompletionCallback`。
+- [x] 定义设备结果观察对象，包含设备任务号、结果版本、来源（`Polling`/`Callback`）和观测时间。
+- [x] 为缺失幂等身份、结果观察和能力组合写契约测试，再实现最小契约。
 
 **验收:** `AGENT_VERIFIED`；WMS 抽象中不出现寄存器地址、NModbus、ERP 表或存储过程名称，并明确旧接口能力不足时不得宣称“恰好执行一次”。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Domain/Devices/DeviceTask.cs`、`DeviceTaskState.cs`、`DeviceCapability.cs`、`DeviceOperationResult.cs`、`src/Warehouse.Wms.Application/Devices/IWarehouseDeviceGateway.cs`、`tests/Warehouse.DeviceGateway.ContractTests/DeviceTaskContractTests.cs` 及相关项目引用、设计书和状态词典。
+- TDD：契约测试先因设备领域类型和网关接口缺失而失败；实现最小值对象、状态/能力枚举和接口后通过。
+- 验证：契约测试 7 个通过；全量 UnitTests 5 个通过；解决方案构建 0 警告、0 错误；未连接 PLC、ERP 或数据库；旧 `warehouse/` 目录未修改。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（设备契约字段和状态语义待负责人确认）；`FIELD_PENDING`（旧接口任务号去重/查询、停止和回调能力未在现场确认）。
+- 已知风险：当前契约只定义抽象和值对象，尚未实现模拟网关或旧 API 适配；没有现场能力确认时，发送后超时仍必须进入 `PhysicalStateUnknown`，不得自动重发。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 2.2：实现模拟设备网关
 

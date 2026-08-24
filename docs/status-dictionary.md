@@ -6,8 +6,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.1` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `0.9` |
+| 词典版本 | `0.2` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.2` |
 | 自动化状态 | `AGENT_VERIFIED` 待代码和契约测试实现后复核 |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |

@@ -22,6 +22,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Warehouse.DeviceGateway\Warehouse.DeviceGateway.csproj" />
+    <ProjectReference Include="..\..\src\Warehouse.Wms.Application\Warehouse.Wms.Application.csproj" />
+    <ProjectReference Include="..\..\src\Warehouse.Wms.Domain\Warehouse.Wms.Domain.csproj" />
   </ItemGroup>
 
 </Project>
