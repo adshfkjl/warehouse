@@ -378,13 +378,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Application/Inventory/InventoryService.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Inventory/InventoryServiceTests.cs`
 
-- [ ] 定义可用、锁定、待入库、待出库、冻结和异常库存状态。
-- [ ] 每次增加、减少、锁定、解锁、移库和调整都写不可篡改流水。
-- [ ] 用幂等键和并发版本防止重复扣减、负库存和重复流水。
-- [ ] 将来源单据、任务号、操作人、原因和时间写入流水。
-- [ ] 编写重复请求、超量扣减、并发锁定、事务回滚和从流水重算余额测试。
+- [x] 定义可用、锁定、待入库、待出库、冻结和异常库存状态。
+- [x] 每次增加、减少、锁定、解锁、移库和调整都写不可篡改流水。
+- [x] 用幂等键和并发版本防止重复扣减、负库存和重复流水。
+- [x] 将来源单据、任务号、操作人、原因和时间写入流水。
+- [x] 编写重复请求、超量扣减、并发锁定、事务回滚和从流水重算余额测试。
 
 **验收:** `AGENT_VERIFIED`；库存余额可从流水重算，控制器不能直接修改库存数量。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Domain/Inventory/InventoryStatus.cs`、`InventoryBalance.cs`、`InventoryTransaction.cs`、`src/Warehouse.Wms.Application/Inventory/InventoryService.cs`、`tests/Warehouse.Wms.UnitTests/Inventory/InventoryServiceTests.cs`，并同步设计书、状态词典和项目计划。
+- TDD：先添加库存服务测试并确认领域类型和服务缺失导致编译失败；实现增加、减少、锁定、解锁、移库、调整、幂等键冲突、负库存防护、并发锁定、失败回滚和流水重算后，库存测试 8 个通过。
+- 验证：`dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、`dotnet list Warehouse.Wms.sln package --vulnerable` 和 `git diff --check` 均通过；未连接 PLC、ERP 或生产数据库；`git diff --name-only -- warehouse` 无输出。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（库存锁定的业务粒度和调整授权规则需负责人确认）；`FIELD_PENDING`（真实库位、托盘和账实核对尚未执行）。
+- 已知风险：当前服务以内存状态验证领域事务和流水重算，持久化表、Outbox/Inbox 和数据库并发提交由后续基础设施/任务调度任务承接；冻结和异常状态只能由后续授权处置流程改变。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 七、阶段 4：任务状态机、调度器、资源锁和恢复
 
