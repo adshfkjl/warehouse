@@ -316,16 +316,26 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Test: `tests/Warehouse.DeviceGateway.ContractTests/LegacyPlcApiGatewayTests.cs`
 - Modify: `docs/field-baseline.md`
 
-- [ ] 将旧 API 的入库、出库、移库、状态读取和连接测试映射到设备契约。
-- [ ] 将 HTTP 错误、PLC 忙、离线、超时和完成状态转换为统一结果。
-- [ ] 探测并记录旧 API 是否接受 WMS 任务号、是否支持按任务号查询、是否支持停止和是否提供回调；未知能力标记为 `BLOCKED`。
-- [ ] 适配器只调用旧设备能力，不调用 ERP 单据查询、库存回写或业务存储过程。
-- [ ] 旧接口明确支持任务号去重且可按任务号查询时，才允许同一命令自动重试。
-- [ ] 请求发送后超时且无法按任务号查询时，立即返回 `PhysicalStateUnknown`，禁止自动重试、释放资源或再次下发，直到设备对账或人工确认。
-- [ ] 为调用超时、重复幂等键、旧 API 返回“触发成功但未完成”和能力不足场景写测试。
-- [ ] 运行契约测试并检查 `git diff --name-only -- warehouse` 为空。
+- [x] 将旧 API 的入库、出库、移库、状态读取和连接测试映射到设备契约。
+- [x] 将 HTTP 错误、PLC 忙、离线、超时和完成状态转换为统一结果。
+- [x] 探测并记录旧 API 是否接受 WMS 任务号、是否支持按任务号查询、是否支持停止和是否提供回调；未知能力标记为 `BLOCKED`。
+- [x] 适配器只调用旧设备能力，不调用 ERP 单据查询、库存回写或业务存储过程。
+- [x] 旧接口明确支持任务号去重且可按任务号查询时，才允许同一命令自动重试。
+- [x] 请求发送后超时且无法按任务号查询时，立即返回 `PhysicalStateUnknown`，禁止自动重试、释放资源或再次下发，直到设备对账或人工确认。
+- [x] 为调用超时、幂等能力未确认时不自动重试、旧 API 返回“触发成功但未完成”和能力不足场景写测试。
+- [x] 运行契约测试并检查 `git diff --name-only -- warehouse` 为空。
 
 **验收:** `AGENT_VERIFIED`；模拟器和旧 API 适配器都通过同一组契约测试，并输出旧接口能力矩阵。只有现场确认具备任务号去重/查询时，相关能力才可标记 `HUMAN_CONFIRMED`；否则统一采用超时未知策略。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.DeviceGateway/LegacyPlcApiGateway.cs`、`src/Warehouse.DeviceGateway/Legacy/LegacyPlcClient.cs`、`src/Warehouse.DeviceGateway/Legacy/LegacyCapabilityProbe.cs`、`tests/Warehouse.DeviceGateway.ContractTests/LegacyPlcApiGatewayTests.cs`、`docs/field-baseline.md`，并同步设计书和状态词典。
+- TDD/契约测试：覆盖入库、出库、移库路由映射，连接测试，在线执行状态轮询，HTTP 503/504，PLC 忙，发送超时、停止不支持、非法位置/装载点、非法或缺少 `isSuccess` 的成功响应、状态版本递增；旧接口触发成功保持 `Accepted`，不伪造完成。
+- 验证：`dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、`dotnet list Warehouse.Wms.sln package --vulnerable` 和 `git diff --check` 均通过；设备网关契约测试 37 个通过；未连接 PLC、ERP 或数据库；`git diff --name-only -- warehouse` 无输出。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（旧 API 结果语义和参数需负责人确认）；`FIELD_PENDING`（任务号去重/查询、停止、回调、超时恢复能力未现场验证）。
+- 已知风险：旧 API 成功只证明触发请求被接受；发送后超时不可安全重发，必须进入 `PhysicalStateUnknown` 并等待设备对账或人工确认。`GetStatusAsync` 只有显式 `TaskQuery` 能力和已确认 PLC 编号同时提供时启用，且旧状态接口参数按 PLC 编号处理，不能据此宣称任务号查询。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 六、阶段 3：基础资料、托盘和库存账
 

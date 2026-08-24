@@ -2,8 +2,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 基线版本 | 0.1 |
+| 基线版本 | 0.2 |
 | 建立任务 | Task 0.2 |
+| 最后更新任务 | Task 2.3 |
 | 建立日期 | 2026-08-25 |
 | 适用范围 | 第一阶段旧 PLC 接口兼容与模拟测试 |
 | 文档状态 | `AGENT_VERIFIED`（仅表示来源和结构已核对） |
@@ -195,7 +196,25 @@ effectiveAddress = baseAddress + RegisterAddrOffset
 | 发送后网络超时重试 | 旧源码未证明按任务号去重/查询能力 | `BLOCKED：默认不得自动重试` | `BLOCKED：设备负责人待指定`；旧 API 契约探测和现场签字 | `BLOCKED：待负责人指定` | 自动重试可能导致重复物理动作；应进入 `PhysicalStateUnknown` |
 | 心跳失联判据 | 代码发送周期约 1s，未定义 PLC 端判据 | `BLOCKED` | `BLOCKED：PLC 负责人待指定`；PLC 程序/参数表和断网模拟 | `BLOCKED：待负责人指定` | 无法安全判定在线、离线和恢复 |
 
-## 8. 待确认事项总表
+## 8. 旧 PLC HTTP API 兼容能力矩阵
+
+Task 2.3 在不连接生产 PLC 的前提下，对旧系统源码中可见的 HTTP 路由建立了只读适配器。适配器只触发旧设备 API，不读取 ERP 单据、不回写库存，也不直接写寄存器。
+
+| 能力 | 旧 API 路由/证据 | 当前适配行为 | 能力状态 |
+| --- | --- | --- | --- |
+| 入库触发 | `POST api/plc-operations/inbound` | HTTP 成功只映射为 `Accepted`，不伪造设备完成 | `SOURCE_VERIFIED` |
+| 出库触发 | `POST api/plc-operations/outbound` | HTTP 成功只映射为 `Accepted`，不伪造设备完成 | `SOURCE_VERIFIED` |
+| 移库触发 | `POST api/plc-operations/transfer` | 映射源/目标货架和位置后发送 | `SOURCE_VERIFIED` |
+| 状态读取 | `POST api/plc-operations/readplcstatus` | 仅显式配置 `TaskQuery` 能力并提供已确认的 PLC 编号时轮询；旧接口参数实际是 PLC 编号，不能证明按任务号查询 | `BLOCKED` |
+| 连接测试 | `POST api/PlcConfigurations/{plcId}/test-connection` | 成功映射为 `Succeeded` | `SOURCE_VERIFIED` |
+| 任务号去重 | 旧路由和请求模型未出现 WMS 任务号去重协议 | 禁止自动重试 | `BLOCKED` |
+| 按任务号查询 | 旧路由未提供任务号查询契约 | 发送后超时进入 `PhysicalStateUnknown` | `BLOCKED` |
+| 停止控制 | 旧路由未提供停止接口 | 返回 `LEGACY_STOP_UNSUPPORTED`，不伪造停止确认 | `BLOCKED` |
+| 完成回调 | 旧路由未提供回调契约 | 第一版只保留统一观察模型，默认不启用回调 | `BLOCKED` |
+
+错误映射规则：HTTP 503/504 为 `Offline`；PLC 忙为 `Failed/PLC_BUSY`；请求超时或发送结果无法确认时为 `PhysicalStateUnknown`；成功 HTTP 响应缺少合法 JSON 结果时为 `Unknown/LEGACY_INVALID_RESPONSE`。在任务号去重和查询能力未经现场确认前，不得重发未知结果任务、释放资源或将触发成功当作物理完成。
+
+## 9. 待确认事项总表
 
 在以下事项全部完成现场负责人签字前，设备网关只能使用模拟 PLC 和脱敏开发配置：
 
