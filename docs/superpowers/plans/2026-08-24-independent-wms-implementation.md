@@ -351,13 +351,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Infrastructure/Persistence/Migrations/`
 - Test: `tests/Warehouse.Wms.UnitTests/MasterData/`
 
-- [ ] 建立仓库、库区、巷道、货架、库位、装载点、设备、物料、容器和托盘实体。
-- [ ] 为库位编码、托盘编码、设备编号和装载点建立唯一约束。
-- [ ] 为库位增加容量、重量、尺寸、禁用、锁定和现场映射字段。
-- [ ] 为托盘增加版本号和当前归属状态，禁止同一托盘双占用。
-- [ ] 写实体约束测试，生成第一版迁移和开发样例种子。
+- [x] 建立仓库、库区、巷道、货架、库位、装载点、设备、物料、容器和托盘实体。
+- [x] 为库位编码、托盘编码、设备编号和装载点建立唯一约束。
+- [x] 为库位增加容量、重量、尺寸、禁用、锁定和现场映射字段。
+- [x] 为托盘增加版本号和当前归属状态，禁止同一托盘双占用。
+- [x] 写实体约束测试，生成第一版迁移和开发样例种子。
 
 **验收:** `AGENT_VERIFIED`；数据库可独立建立基础资料，不读取 ERP 表。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Domain/MasterData/` 下仓库、库区、巷道、货架、库位、装载点、设备、物料、容器和托盘实体；`src/Warehouse.Wms.Infrastructure/Persistence/WarehouseDbContext.cs`、设计时工厂、`src/Warehouse.Wms.Infrastructure/Migrations/` 首个迁移和模型快照；测试项目 EF Core 引用及 `tests/Warehouse.Wms.UnitTests/MasterData/MasterDataModelTests.cs`；同步 `PROJECT_DESIGN.md`。
+- TDD：先添加并运行基础资料模型测试，确认实体/DbContext/EF 引用缺失导致编译失败；随后实现构造参数校验、SQL Server 模型唯一索引、托盘当前库位/装载点过滤唯一索引、互斥检查约束、并发版本和开发样例种子，模型测试 4 个通过。
+- 验证：`dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、`dotnet list Warehouse.Wms.sln package --vulnerable`、`git diff --check`；使用本地 `.codex-tools/dotnet-ef` 生成 `InitialMasterData` 迁移；未连接 PLC、ERP、生产数据库或 Docker SQL Server。
+- 自动化状态：`AGENT_VERIFIED`（迁移文件已生成，未执行数据库更新）。
+- 外部门禁：`HUMAN_PENDING`（编码层级、容量和现场映射字段语义需负责人确认）；`FIELD_PENDING`（真实库位/托盘归属与现场基线尚未核对）。
+- 已知风险：当前迁移目标为 SQL Server；本地未运行 Docker/SQL Server，迁移执行和样例种子落库尚未现场验证；托盘当前库位和装载点均有过滤唯一索引，并通过互斥检查约束禁止同时归属，后续业务服务仍需使用并发版本提交。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 3.2：建立库存流水和余额
 

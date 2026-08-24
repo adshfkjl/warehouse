@@ -9,7 +9,7 @@
 - .NET 8 SDK
 - PowerShell 7（Windows PowerShell 5.1 也可运行基础脚本）
 - Docker Desktop 及 Compose（执行 SQL Server 数据库迁移和集成测试时需要）
-- EF Core CLI `dotnet-ef`（当前基础脚手架尚未包含迁移项目，后续持久化 Task 才会启用）
+- EF Core CLI `dotnet-ef` 8.x（可使用仓库本地 `.codex-tools/dotnet-ef`，或安装到用户工具目录）
 
 ## 配置
 
@@ -50,7 +50,7 @@ dotnet ef database update --project src/Warehouse.Wms.Infrastructure --startup-p
 docker compose -f docker-compose.dev.yml down -v
 ```
 
-在当前骨架阶段没有 `Migrations/` 和 `dotnet-ef` 依赖，验证脚本会明确报告迁移检查不适用并继续执行健康检查；不得通过创建空迁移或跳过实际迁移执行伪造成功。
+Task 3.1 已包含 `src/Warehouse.Wms.Infrastructure/Migrations/` 首个基础资料迁移。验证脚本会检查迁移目录；执行数据库更新仍需要本地 Docker SQL Server、可用的 `dotnet-ef` 和开发连接串。缺少这些条件时必须标记为 `BLOCKED`，不得通过创建空迁移或跳过实际迁移执行伪造成功。
 
 ## 健康检查
 

@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.8">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <ProjectReference Include="..\Warehouse.Wms.Application\Warehouse.Wms.Application.csproj" />
     <ProjectReference Include="..\Warehouse.Wms.Infrastructure\Warehouse.Wms.Infrastructure.csproj" />
     <ProjectReference Include="..\Warehouse.DeviceGateway\Warehouse.DeviceGateway.csproj" />
