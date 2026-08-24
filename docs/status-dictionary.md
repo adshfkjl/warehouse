@@ -6,8 +6,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.3` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.6` |
+| 词典版本 | `0.4` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.7` |
 | 自动化状态 | `AGENT_VERIFIED` 待代码和契约测试实现后复核 |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
@@ -163,6 +163,8 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 | `ManualIntervention` | 人工确认物理结果并结案的工作状态，不是成功别名 |
 
 设备命令只有在设备具备任务号去重和查询能力且能力已确认时才可自动重试；否则 `Dispatching`/发送超时后的安全结果是 `PhysicalStateUnknown`。
+
+任务状态机实现必须严格使用上述 16 个状态和合法流转；每次迁移写入不可篡改状态历史，包含任务、前后状态、操作者、原因、错误码、UTC 时间和版本。`Succeeded`、`Canceled`、`ManualIntervention` 不允许普通更新覆盖；`SentToPlc`/`Executing` 的取消必须经过 `CancelRequested`/`StopRequested`，不能直接标记取消。
 
 ## 9. 第一版范围
 

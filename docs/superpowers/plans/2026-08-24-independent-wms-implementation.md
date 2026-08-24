@@ -406,12 +406,22 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Domain/Tasks/TaskStateHistory.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Tasks/TaskStateMachineTests.cs`
 
-- [ ] 定义 `Created`、`Allocated`、`Queued`、`Dispatching`、`SentToPlc`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Canceled`、`CancelRequested`、`StopRequested`、`StopConfirmed`、`StopFailed`、`PhysicalStateUnknown` 和 `ManualIntervention`。
-- [ ] 为每条状态迁移定义前置状态、操作者、原因、错误码和时间。
-- [ ] 禁止从 `SentToPlc`/`Executing` 直接把任务标记为物理成功的取消结果。
-- [ ] 编写非法跳转、重复完成、重复取消和未知结果测试。
+- [x] 定义 `Created`、`Allocated`、`Queued`、`Dispatching`、`SentToPlc`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Canceled`、`CancelRequested`、`StopRequested`、`StopConfirmed`、`StopFailed`、`PhysicalStateUnknown` 和 `ManualIntervention`。
+- [x] 为每条状态迁移定义前置状态、操作者、原因、错误码和时间。
+- [x] 禁止从 `SentToPlc`/`Executing` 直接把任务标记为物理成功的取消结果。
+- [x] 编写非法跳转、重复完成、重复取消和未知结果测试。
 
 **验收:** `AGENT_VERIFIED`；状态机能表达“取消未下发”和“设备可能仍在动作”两种不同语义。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Domain/Tasks/TaskState.cs`、`WarehouseTask.cs`、`TaskStateHistory.cs`、`tests/Warehouse.Wms.UnitTests/Tasks/TaskStateMachineTests.cs`，并同步 `PROJECT_DESIGN.md`、`docs/status-dictionary.md`。
+- TDD：先添加状态集合、正常执行链、历史字段、取消/停止、超时/物理未知、终态和非法迁移测试；确认任务领域类型缺失导致测试编译失败后，实现 16 状态迁移矩阵、UTC 历史记录、版本递增和终态保护，7 个测试通过。
+- 验证：`dotnet test tests/Warehouse.Wms.UnitTests/Warehouse.Wms.UnitTests.csproj --filter FullyQualifiedName~TaskStateMachineTests --no-restore` 通过；随后执行全量构建、全量测试、漏洞扫描、`git diff --check` 和旧目录保护；未连接 PLC、ERP、生产数据库或执行后续任务。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（状态流转和人工处置语义需负责人确认）；`FIELD_PENDING`（现场设备停止、超时和物理未知恢复尚未验证）。
+- 已知风险：状态历史目前为领域内存集合，持久化映射和并发提交属于 Task 4.2；`ManualIntervention` 保持终态，人工确认物理结果并结案的专用服务属于 Task 4.4；当前未连接真实设备。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 4.2：实现幂等、资源锁和短事务提交
 
