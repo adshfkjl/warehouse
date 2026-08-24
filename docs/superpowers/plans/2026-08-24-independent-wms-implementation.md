@@ -206,14 +206,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `tests/Warehouse.Wms.IntegrationTests/`
 - Create: `tests/Warehouse.DeviceGateway.ContractTests/`
 
-- [ ] 创建 `Warehouse.Wms.sln` 和上述项目，所有命名空间统一使用 `Warehouse.Wms.*`。
-- [ ] 让 Domain 不引用 EF Core、数据库、HTTP、PLC 或 UI。
-- [ ] 让 Application 只依赖 Domain 和抽象接口。
-- [ ] 让 DeviceGateway 只暴露设备任务和设备状态接口。
-- [ ] 添加不含真实密钥、ERP 连接串和生产 PLC 地址的配置模板。
-- [ ] 运行统一本地验收命令和 `dotnet list package --vulnerable`。
+- [x] 创建 `Warehouse.Wms.sln` 和上述项目，所有命名空间统一使用 `Warehouse.Wms.*`。
+- [x] 让 Domain 不引用 EF Core、数据库、HTTP、PLC 或 UI。
+- [x] 让 Application 只依赖 Domain 和抽象接口。
+- [x] 让 DeviceGateway 只暴露设备任务和设备状态接口。
+- [x] 添加不含真实密钥、ERP 连接串和生产 PLC 地址的配置模板。
+- [x] 运行统一本地验收命令和 `dotnet list package --vulnerable`。
 
 **验收:** `AGENT_VERIFIED`；无数据库、无 PLC、无 ERP 时 API 可启动健康检查；旧 `warehouse/` 目录无变更。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`Warehouse.Wms.sln`、`src/Warehouse.Wms.Api/`、`src/Warehouse.Wms.Application/`、`src/Warehouse.Wms.Domain/`、`src/Warehouse.Wms.Infrastructure/`、`src/Warehouse.DeviceGateway/`、`tests/`、`PROJECT_DESIGN.md`。
+- 验证：`dotnet restore Warehouse.Wms.sln`（退出码 0）；`dotnet build Warehouse.Wms.sln --no-restore`（退出码 0，0 警告、0 错误）；`dotnet test Warehouse.Wms.sln --no-build`（退出码 0，3 个测试程序集共 3 个测试通过；集成测试程序集当前无测试，后续由集成任务补充）；`dotnet list Warehouse.Wms.sln package --vulnerable`（未发现漏洞包）；API `http://127.0.0.1:5087/health/live`、`/health/ready`、`/` 均返回 200；`git diff --check` 通过；`git diff --name-only -- warehouse` 无输出。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（项目边界和健康检查行为待负责人确认）；`FIELD_PENDING`（真实 PLC、账实和恢复演练未执行）。
+- 已知风险：集成测试项目尚无测试用例；设备网关尚未实现真实协议适配；根目录 `.gitignore` 保留任务开始前的用户删除状态，未纳入本 Task 提交。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 1.2：建立本地环境和质量门禁
 
