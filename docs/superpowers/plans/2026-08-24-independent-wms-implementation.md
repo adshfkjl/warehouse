@@ -155,12 +155,20 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Reference: `warehouse/PlcManagementService/Models/ModbusAddress.cs`
 - Reference: `warehouse/PlcManagementService/Services/ModbusService.cs`
 
-- [ ] 建立 PLC 编号、IP、端口、Slave ID、地址偏移、设备类型和装载点表。
-- [ ] 建立入库、出库、移库、复位、急停、完成、报警和心跳信号表。
-- [ ] 建立库位编码、托盘编码、重量单位、数量精度、并发数和超时表。
-- [ ] 对每个未知项填写责任人、确认方式、截止日期和阻塞影响；未知项使用 `BLOCKED`。
+- [x] 建立 PLC 编号、IP、端口、Slave ID、地址偏移、设备类型和装载点表。
+- [x] 建立入库、出库、移库、复位、急停、完成、报警和心跳信号表。
+- [x] 建立库位编码、托盘编码、重量单位、数量精度、并发数和超时表。
+- [x] 对每个未知项填写责任人、确认方式、截止日期和阻塞影响；未知项使用 `BLOCKED`。
 
 **验收:** `AGENT_VERIFIED` 只能表示文档结构和来源齐全；只有现场负责人签字后才追加 `HUMAN_CONFIRMED`。签字缺失时不允许 Agent 继续设备实现。
+
+**执行记录（2026-08-25）:**
+
+- 修改：`docs/field-baseline.md`、`PROJECT_DESIGN.md`、本计划文件。
+- 验证：旧寄存器常量、连接参数、地址偏移、状态解析、心跳、读写超时和报警码来源已核对；所有未确认现场参数均标记为 `BLOCKED`；未连接真实 PLC。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（设备清单、编码、计量和信号语义待负责人确认）；`FIELD_PENDING`（真实设备和恢复演练未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 0.3：冻结第一版范围和状态词典
 
