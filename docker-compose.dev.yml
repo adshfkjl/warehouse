@@ -1,0 +1,15 @@
+services:
+  wms-test-db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: warehouse-wms-test-db
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "WmsDevOnly!123"
+    ports:
+      - "127.0.0.1:14333:1433"
+    volumes:
+      - warehouse-wms-test-db:/var/opt/mssql
+
+volumes:
+  warehouse-wms-test-db:

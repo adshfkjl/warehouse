@@ -233,12 +233,22 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `docs/development.md`
 - Create: `scripts/verify.ps1`
 
-- [ ] 在 `scripts/verify.ps1` 中按顺序执行 restore、build、test、迁移检查、健康检查和旧目录保护检查。
-- [ ] 配置测试失败即失败、编译警告策略和独立测试数据库。
-- [ ] 在 `docs/development.md` 写明模拟网关默认启用和 ERP 连接串可缺省。
-- [ ] 运行 `pwsh -File scripts/verify.ps1`，记录所有命令退出码为 0。
+- [x] 在 `scripts/verify.ps1` 中按顺序执行 restore、build、test、迁移检查、健康检查和旧目录保护检查。
+- [x] 配置测试失败即失败、编译警告策略和独立测试数据库。
+- [x] 在 `docs/development.md` 写明模拟网关默认启用和 ERP 连接串可缺省。
+- [x] 运行 `pwsh -File scripts/verify.ps1`，记录所有命令退出码为 0。
 
 **验收:** `AGENT_VERIFIED`；新开发者可在空环境按文档运行统一验证脚本。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`.editorconfig`、`Directory.Build.props`、`docker-compose.dev.yml`、`docs/development.md`、`scripts/verify.ps1`、`tests/Warehouse.Wms.UnitTests/QualityGateConfigurationTests.cs`、`PROJECT_DESIGN.md`。
+- TDD：先以缺失文件和验证脚本结构测试得到预期失败；实现后脚本顺序、必需文件和 PowerShell 迁移判断回归测试通过。
+- 验证：`dotnet restore Warehouse.Wms.sln`（退出码 0）；`dotnet build Warehouse.Wms.sln --no-restore`（退出码 0，0 警告、0 错误）；`dotnet test Warehouse.Wms.sln --no-build --no-restore`（退出码 0，Unit 5、DeviceGateway 1 通过，集成测试程序集当前无测试）；`dotnet list Warehouse.Wms.sln package --vulnerable`（退出码 0，未发现漏洞包）；`pwsh -NoProfile -File scripts/verify.ps1`（退出码 0，按 restore/build/test/migration/health/protection 顺序执行，健康端点 200，旧目录保护通过）；`docker compose config` 未执行，因本机未安装 Docker CLI。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（本地开发门禁和数据库模板待负责人确认）；`FIELD_PENDING`（真实数据库、PLC、账实和恢复演练未执行）。
+- 已知风险：Docker CLI、Docker daemon、EF CLI 当前不可用；当前无迁移，因此脚本将数据库检查标记为不适用，后续持久化任务必须在有 Docker/EF 的环境重新执行迁移门禁；集成测试项目尚无测试用例。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 五、阶段 2：设备契约、旧接口适配器和模拟器
 
