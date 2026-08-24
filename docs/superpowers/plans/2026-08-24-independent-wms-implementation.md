@@ -176,12 +176,20 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Modify: `PROJECT_DESIGN.md`
 - Create: `docs/status-dictionary.md`
 
-- [ ] 定义入库、出库、移库、盘点、库存和设备任务的状态集合及合法流转。
-- [ ] 定义第一版包含和排除的业务类型。
-- [ ] 定义手工建单、Excel 导入和外部 API 的优先级。
-- [ ] 为取消、未知设备结果和人工结案保留独立状态，禁止用 `Succeeded` 代替。
+- [x] 定义入库、出库、移库、盘点、库存和设备任务的状态集合及合法流转。
+- [x] 定义第一版包含和排除的业务类型。
+- [x] 定义手工建单、Excel 导入和外部 API 的优先级。
+- [x] 为取消、未知设备结果和人工结案保留独立状态，禁止用 `Succeeded` 代替。
 
 **验收:** `AGENT_VERIFIED` 后由负责人完成 `HUMAN_CONFIRMED`；任何待开发功能都能映射到状态词典或被明确排除。
+
+**执行记录（2026-08-25）:**
+
+- 修改：`docs/status-dictionary.md`、`PROJECT_DESIGN.md`、本计划文件。
+- 验证：状态集合、合法流转、取消/停止/物理未知/人工处置语义、第一版范围和入口优先级均已记录；`Dispatching` 已作为发送尝试状态纳入任务流转；未把 `Succeeded` 用作取消或人工结案别名。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（负责人尚未签字确认第一版范围和状态含义）；`FIELD_PENDING`（真实设备恢复和账实演练未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 四、阶段 1：新系统骨架和质量门禁
 
@@ -328,7 +336,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Domain/Tasks/TaskStateHistory.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Tasks/TaskStateMachineTests.cs`
 
-- [ ] 定义 `Created`、`Allocated`、`Queued`、`SentToPlc`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Canceled`、`CancelRequested`、`StopRequested`、`StopConfirmed`、`StopFailed`、`PhysicalStateUnknown` 和 `ManualIntervention`。
+- [ ] 定义 `Created`、`Allocated`、`Queued`、`Dispatching`、`SentToPlc`、`Executing`、`Succeeded`、`Failed`、`TimedOut`、`Canceled`、`CancelRequested`、`StopRequested`、`StopConfirmed`、`StopFailed`、`PhysicalStateUnknown` 和 `ManualIntervention`。
 - [ ] 为每条状态迁移定义前置状态、操作者、原因、错误码和时间。
 - [ ] 禁止从 `SentToPlc`/`Executing` 直接把任务标记为物理成功的取消结果。
 - [ ] 编写非法跳转、重复完成、重复取消和未知结果测试。
