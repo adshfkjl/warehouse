@@ -796,13 +796,20 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `docs/rollback-runbook.md`
 - Create: `tests/Warehouse.DeviceGateway.ContractTests/FieldRegressionChecklist.md`
 
-- [ ] 明确只读监控、单库区试点、双跑、人工对账和切换顺序。
-- [ ] 明确急停、断网、断电、PLC 重启、服务重启、任务未知结果和人工接管步骤。
-- [ ] 明确成功条件、停止条件、回滚条件、责任人、停机窗口和证据留存位置。
-- [ ] 先在模拟 PLC 和测试库完成回归，再由现场人员执行受控设备测试。
-- [ ] 未完成现场签字、真实设备回归和账实核对时，状态保持 `BLOCKED`。
+- [x] 明确只读监控、单库区试点、双跑、人工对账和切换顺序。
+- [x] 明确急停、断网、断电、PLC 重启、服务重启、任务未知结果和人工接管步骤。
+- [x] 明确成功条件、停止条件、回滚条件、责任人、停机窗口和证据留存位置。
+- [x] 先在模拟 PLC 和测试库完成回归，再由现场人员执行受控设备测试。
+- [x] 未完成现场签字、真实设备回归和账实核对时，状态保持 `BLOCKED`。
 
 **验收:** `FIELD_VERIFIED`；负责人签署试点结果和回滚演练，未签署不得切换生产主作业，不得修改旧 PLC 时序。
+
+**Task 7.2 执行证据（2026-08-25）：** 新增 [`docs/pilot-runbook.md`](../../../docs/pilot-runbook.md)、[`docs/rollback-runbook.md`](../../../docs/rollback-runbook.md) 和 [`tests/Warehouse.DeviceGateway.ContractTests/FieldRegressionChecklist.md`](../../../tests/Warehouse.DeviceGateway.ContractTests/FieldRegressionChecklist.md)。文档冻结只读监控、单库区双跑、受控试点、人工对账、急停/断网/断电/PLC 重启/服务重启、任务未知结果和人工接管流程，并定义成功、停止、回滚条件、责任人、停机窗口和证据留存。回归清单把模拟 Accepted/Executing/Succeeded、Offline、超时/物理未知、重启查询、幂等重放和停止结果映射到现有自动化测试；真实 PLC 和现场回归未执行。
+
+- 自动化状态：`AGENT_VERIFIED`（文档和模拟回归清单已完成；不代表现场设备验证）。
+- 外部门禁：`HUMAN_PENDING`（负责人尚未确认试点范围、报警/完成码语义、停机窗口和签字责任）；`FIELD_PENDING`/`BLOCKED`（真实 PLC、急停、断网、断电、服务重启、账实核对和回滚签字未执行）。
+- 已知限制：手册中的生产数据库恢复、现场物理停止和人工接管步骤是待签字作业流程；不能用模拟网关、自动化测试或源码默认值替代现场证据。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 十一、阶段 8：可选外部集成
 
