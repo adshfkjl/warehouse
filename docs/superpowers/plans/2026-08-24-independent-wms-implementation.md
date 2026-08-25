@@ -863,9 +863,38 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 已知限制：当前部分业务服务仍使用开发内存实现，默认候选库位/装载点为空；本 Task 只保证运行时依赖可解析，不替代业务数据初始化和现场验证。
 - 旧系统：`warehouse/` 仅作只读参考，未修改。
 
-## 十二、阶段门禁和最终标准
+## 十二、持续建设任务（第一版生产化缺口）
 
-### 12.1 阶段门禁
+### Task 9.1：库存账 SQL Server 持久化
+
+**前置条件:** Task 3.2、4.2 和 8.2 已达到 `AGENT_VERIFIED`；开发 SQL Server 容器可用；不得连接生产数据库。
+
+**目标:** 将库存余额、库存流水和库存操作幂等键从仅内存契约提升为可恢复的 SQL Server 业务账，同时保留无数据库单元/设备契约测试所需的显式内存实现。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Application/Inventory/` 的存储抽象和服务组合
+- `src/Warehouse.Wms.Infrastructure/Persistence/` 的 EF 实体、仓储、DbContext 和迁移
+- `src/Warehouse.Wms.Api/Program.cs`、开发配置和健康探针组合
+- `tests/Warehouse.Wms.UnitTests/Inventory/`、`tests/Warehouse.Wms.IntegrationTests/Inventory/`
+- `PROJECT_DESIGN.md`、本计划和必要的操作说明
+
+**必须完成:**
+- [x] 定义 `IInventoryLedgerStore` 或等价边界；内存实现只用于显式开发/测试模式。
+- [x] 增加余额、流水和幂等记录的 SQL Server 映射、唯一索引、数量/重量精度和乐观版本约束。
+- [x] 每次库存操作在一个短事务内完成幂等校验、余额更新和流水写入；摘要冲突拒绝，重复键返回原事务。
+- [x] 通过 `Wms:PersistenceMode=SqlServer` 显式启用持久化；没有连接串时默认模拟/内存模式仍可启动，生产配置禁止隐式回退。
+- [x] 增加迁移、空库建库、服务重启重载、重复操作、并发版本冲突、负库存和流水重算测试。
+- [x] 不把 PLC 调用或设备等待放入数据库事务，不修改 `warehouse/`。
+
+**验收:** `AGENT_VERIFIED`；定向单元/集成测试、完整构建测试、Docker 迁移和健康检查通过；SQL Server 重启后库存账可重建，API 在显式 SQL 模式下不使用内存库存。
+
+**外部门禁:** `HUMAN_PENDING`（生产数据库保留策略、并发隔离级别和运维责任待确认）；`FIELD_PENDING`（真实 PLC 与现场账实仍未验证）。
+
+**Task 9.1 执行证据（2026-08-25）：** 新增 `IInventoryLedgerStore`、SQL Server EF 余额/流水实体、唯一 `BalanceKey` 和幂等索引、串行化短事务及乐观版本检查；迁移 `20260825133933_InventoryLedgerPersistence` 可从空库建立表。API 默认 `InMemory`，显式 `Wms:PersistenceMode=SqlServer` 时强制要求 `ConnectionStrings:WmsDb` 并注入 SQL 存储。补充了持久化快照重启、幂等重放、摘要冲突、负库存保护和合法负调整测试；Docker SQL Server 实测定向集成测试 1/1 通过，SQL 模式 API 健康端点 200/200。完整构建通过；全量测试 99 个单元、36 个集成和 37 个设备契约通过，未配置 SQL 测试连接时仅 1 个 SQL fixture 按配置动态跳过。旧 `warehouse/` 未修改。
+
+## 十三、阶段门禁和最终标准
+
+### 13.1 阶段门禁
 
 - **门禁 A：** Task 0.1-0.3 的规则、范围和现场基线由 Agent 整理并由负责人确认；未确认项为 `BLOCKED`。
 - **门禁 B：** 阶段 1-2 的骨架、模拟器、适配器和契约测试为 `AGENT_VERIFIED`。
@@ -875,7 +904,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - **门禁 F：** 阶段 7.1 的本地恢复演练通过；阶段 7.2 必须 `FIELD_VERIFIED`。
 - **门禁 G：** 阶段 8 集成关闭时，WMS 仍能独立运行。
 
-### 12.2 第一版完成标准
+### 13.2 第一版完成标准
 
 第一版只有在以下证据全部存在时才算完成：
 

@@ -18,6 +18,7 @@ using Warehouse.Wms.Domain.Devices;
 using Warehouse.Wms.Infrastructure.Health;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Infrastructure.Integrations;
+using Warehouse.Wms.Infrastructure.Persistence;
 
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 
@@ -38,7 +39,29 @@ builder.Services.AddSingleton<WmsTaskScheduler>(sp => new WmsTaskScheduler(
     DeviceCapability.TaskKeyDeduplication | DeviceCapability.TaskQuery | DeviceCapability.StopControl,
     sp.GetRequiredService<TaskSchedulerState>()));
 
-builder.Services.AddSingleton<InventoryService>();
+var persistenceMode = builder.Configuration["Wms:PersistenceMode"] ?? "InMemory";
+if (!persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase)
+    && !persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException("Wms:PersistenceMode must be InMemory or SqlServer.");
+}
+
+if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    var connectionString = builder.Configuration.GetConnectionString("WmsDb");
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        throw new InvalidOperationException("ConnectionStrings:WmsDb is required when Wms:PersistenceMode=SqlServer.");
+    }
+
+    builder.Services.AddSqlServerInventoryPersistence(connectionString);
+    builder.Services.AddSingleton<InventoryService>(sp =>
+        new InventoryService(sp.GetRequiredService<IInventoryLedgerStore>()));
+}
+else
+{
+    builder.Services.AddSingleton<InventoryService>();
+}
 builder.Services.AddSingleton<InboundOrderService>();
 builder.Services.AddSingleton<PutawayAllocationService>();
 builder.Services.AddSingleton<PutawayTaskService>();

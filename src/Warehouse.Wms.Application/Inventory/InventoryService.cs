@@ -6,9 +6,41 @@ namespace Warehouse.Wms.Application.Inventory;
 public sealed class InventoryService
 {
     private readonly object _gate = new();
+    private readonly IInventoryLedgerStore? _ledgerStore;
     private readonly Dictionary<BalanceKey, InventoryBalance> _balances = new();
     private readonly List<InventoryTransaction> _transactions = [];
     private readonly Dictionary<string, InventoryTransaction> _idempotency = new(StringComparer.Ordinal);
+
+    public InventoryService(IInventoryLedgerStore? ledgerStore = null)
+    {
+        _ledgerStore = ledgerStore;
+        if (_ledgerStore is null)
+        {
+            return;
+        }
+
+        var snapshot = _ledgerStore.LoadSnapshotAsync().ConfigureAwait(false).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("The inventory ledger store returned no snapshot.");
+        foreach (var balance in snapshot.Balances)
+        {
+            _balances.Add(ToKey(balance), balance);
+        }
+
+        foreach (var transaction in snapshot.Transactions)
+        {
+            if (_idempotency.TryGetValue(transaction.IdempotencyKey, out var existing)
+                && !string.Equals(existing.Fingerprint, transaction.Fingerprint, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The inventory ledger contains conflicting idempotency records.");
+            }
+
+            if (!_idempotency.ContainsKey(transaction.IdempotencyKey))
+            {
+                _transactions.Add(transaction);
+                _idempotency.TryAdd(transaction.IdempotencyKey, transaction);
+            }
+        }
+    }
 
     public Task<InventoryTransaction> IncreaseAsync(
         Guid materialId,
@@ -279,17 +311,45 @@ public sealed class InventoryService
             try
             {
                 var transaction = operation();
-                _transactions.Add(transaction);
-                _idempotency.Add(context.IdempotencyKey, transaction);
-                return Task.FromResult(transaction);
+                var appendResult = _ledgerStore is null
+                    ? null
+                    : _ledgerStore.AppendAsync(
+                        new InventoryLedgerAppend(transaction, BuildBalanceChanges(balances)),
+                        cancellationToken).ConfigureAwait(false).GetAwaiter().GetResult();
+
+                if (appendResult?.Replayed == true)
+                {
+                    var replaySnapshot = _ledgerStore!
+                        .LoadSnapshotAsync(cancellationToken)
+                        .ConfigureAwait(false)
+                        .GetAwaiter()
+                        .GetResult();
+                    if (replaySnapshot.Transactions.Any(item => item.Id == appendResult.Transaction.Id))
+                    {
+                        RestoreFromSnapshot(replaySnapshot);
+                    }
+                    else
+                    {
+                        RestoreBalances(balances);
+                        ApplyTransaction(_balances, appendResult.Transaction);
+                        if (!_idempotency.ContainsKey(appendResult.Transaction.IdempotencyKey))
+                        {
+                            _transactions.Add(appendResult.Transaction);
+                            _idempotency.Add(appendResult.Transaction.IdempotencyKey, appendResult.Transaction);
+                        }
+                    }
+
+                    return Task.FromResult(appendResult.Transaction);
+                }
+
+                var persistedTransaction = appendResult?.Transaction ?? transaction;
+                _transactions.Add(persistedTransaction);
+                _idempotency.Add(context.IdempotencyKey, persistedTransaction);
+                return Task.FromResult(persistedTransaction);
             }
             catch
             {
-                _balances.Clear();
-                foreach (var item in balances)
-                {
-                    _balances.Add(item.Key, item.Value);
-                }
+                RestoreBalances(balances);
 
                 if (_transactions.Count > transactionsCount)
                 {
@@ -300,6 +360,78 @@ public sealed class InventoryService
             }
         }
     }
+
+    private List<InventoryLedgerBalanceChange> BuildBalanceChanges(
+        IReadOnlyDictionary<BalanceKey, InventoryBalance> previous)
+    {
+        var changes = new List<InventoryLedgerBalanceChange>();
+        foreach (var (key, balance) in _balances)
+        {
+            if (!previous.TryGetValue(key, out var old) || !Equivalent(old, balance))
+            {
+                changes.Add(new InventoryLedgerBalanceChange(balance, old?.Version ?? 0));
+            }
+        }
+
+        return changes;
+    }
+
+    private void RestoreBalances(IReadOnlyDictionary<BalanceKey, InventoryBalance> balances)
+    {
+        _balances.Clear();
+        foreach (var item in balances)
+        {
+            _balances.Add(item.Key, item.Value);
+        }
+    }
+
+    private void RestoreFromSnapshot(InventoryLedgerSnapshot snapshot)
+    {
+        var restoredBalances = snapshot.Balances.ToDictionary(ToKey);
+        var restoredTransactions = new List<InventoryTransaction>();
+        var restoredIdempotency = new Dictionary<string, InventoryTransaction>(StringComparer.Ordinal);
+
+        foreach (var transaction in snapshot.Transactions)
+        {
+            if (restoredIdempotency.TryGetValue(transaction.IdempotencyKey, out var existing)
+                && !string.Equals(existing.Fingerprint, transaction.Fingerprint, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The inventory ledger contains conflicting idempotency records.");
+            }
+
+            if (restoredIdempotency.TryAdd(transaction.IdempotencyKey, transaction))
+            {
+                restoredTransactions.Add(transaction);
+            }
+        }
+
+        _balances.Clear();
+        foreach (var item in restoredBalances)
+        {
+            _balances.Add(item.Key, item.Value);
+        }
+
+        _transactions.Clear();
+        _transactions.AddRange(restoredTransactions);
+        _idempotency.Clear();
+        foreach (var item in restoredIdempotency)
+        {
+            _idempotency.Add(item.Key, item.Value);
+        }
+    }
+
+    private static bool Equivalent(InventoryBalance left, InventoryBalance right) =>
+        left.MaterialId == right.MaterialId
+        && left.PalletId == right.PalletId
+        && left.LocationId == right.LocationId
+        && string.Equals(left.BatchNumber, right.BatchNumber, StringComparison.Ordinal)
+        && left.Quantity == right.Quantity
+        && left.WeightKg == right.WeightKg
+        && left.Status == right.Status
+        && left.Version == right.Version;
+
+    private static BalanceKey ToKey(InventoryBalance balance) =>
+        new(balance.MaterialId, balance.PalletId, balance.LocationId, Normalize(balance.BatchNumber));
 
     private static InventoryTransaction CreateTransaction(
         InventoryOperationContext context,

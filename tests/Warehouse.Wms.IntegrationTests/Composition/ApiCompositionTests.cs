@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.DeviceGateway;
+using Warehouse.Wms.Application.Inventory;
 
 namespace Warehouse.Wms.IntegrationTests.Composition;
 
@@ -43,5 +44,13 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
             var controller = ActivatorUtilities.CreateInstance(scope.ServiceProvider, controllerType);
             Assert.NotNull(controller);
         }
+    }
+
+    [Fact]
+    public void Api_defaults_to_in_memory_inventory_without_a_database_store()
+    {
+        using var scope = _factory.Services.CreateScope();
+        Assert.Null(scope.ServiceProvider.GetService<IInventoryLedgerStore>());
+        Assert.IsType<InventoryService>(scope.ServiceProvider.GetRequiredService<InventoryService>());
     }
 }

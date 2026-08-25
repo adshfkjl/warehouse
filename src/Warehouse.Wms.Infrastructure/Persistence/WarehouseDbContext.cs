@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.MasterData;
 using WarehouseEntity = Warehouse.Wms.Domain.MasterData.Warehouse;
 
@@ -16,6 +17,8 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<Material> Materials => Set<Material>();
     public DbSet<Container> Containers => Set<Container>();
     public DbSet<Pallet> Pallets => Set<Pallet>();
+    public DbSet<InventoryBalanceEntity> InventoryBalances => Set<InventoryBalanceEntity>();
+    public DbSet<InventoryTransactionEntity> InventoryTransactions => Set<InventoryTransactionEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -129,6 +132,44 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.HasIndex(x => x.CurrentLocationId).IsUnique().HasFilter("[CurrentLocationId] IS NOT NULL");
             entity.HasOne<Location>().WithMany().HasForeignKey(x => x.CurrentLocationId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<LoadingPoint>().WithMany().HasForeignKey(x => x.CurrentLoadingPointId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<InventoryBalanceEntity>(entity =>
+        {
+            entity.ToTable("InventoryBalances", table =>
+                table.HasCheckConstraint("CK_InventoryBalances_NonNegative", "Quantity >= 0 AND WeightKg >= 0"));
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.BatchNumber).HasMaxLength(128);
+            entity.Property(x => x.Quantity).HasPrecision(18, 3);
+            entity.Property(x => x.WeightKg).HasPrecision(18, 3);
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.Property(x => x.BalanceKey).HasMaxLength(500).IsRequired();
+            entity.HasIndex(x => x.BalanceKey).IsUnique();
+            entity.HasIndex(x => new { x.MaterialId, x.LocationId });
+        });
+
+        modelBuilder.Entity<InventoryTransactionEntity>(entity =>
+        {
+            entity.ToTable("InventoryTransactions", table =>
+                table.HasCheckConstraint(
+                    "CK_InventoryTransactions_QuantityWeight",
+                    "Type = 'Adjustment' OR (Quantity >= 0 AND WeightKg >= 0)"));
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Fingerprint).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Type).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.StatusBefore).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.StatusAfter).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.BatchNumber).HasMaxLength(128);
+            entity.Property(x => x.SourceDocumentId).HasMaxLength(128);
+            entity.Property(x => x.TaskNumber).HasMaxLength(128);
+            entity.Property(x => x.OperatorId).HasMaxLength(128);
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.Property(x => x.Quantity).HasPrecision(18, 3);
+            entity.Property(x => x.WeightKg).HasPrecision(18, 3);
+            entity.HasIndex(x => x.IdempotencyKey).IsUnique();
+            entity.HasIndex(x => new { x.MaterialId, x.OccurredAt });
         });
 
         SeedDevelopmentData(modelBuilder);
