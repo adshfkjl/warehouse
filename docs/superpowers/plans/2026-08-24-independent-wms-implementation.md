@@ -782,7 +782,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `AGENT_VERIFIED`；运维人员可判断各组件健康并完成无现场设备的恢复演练。
 
-**Task 7.1 执行证据（2026-08-25）：** 新增 `ReportsController` 和 `IReportsReadModel` 内存只读快照，覆盖库存、库位利用率、入库/出库、移库、托盘追踪、盘点差异和设备报警；新增 `WarehouseHealthCheckService` 聚合 API、数据库、Worker、设备网关和 Outbox/Inbox 状态，并在 API DI 中注册开发安全默认实现。新增 [`docs/operations.md`](../../../docs/operations.md) 和 [`scripts/recovery-drill.ps1`](../../../scripts/recovery-drill.ps1)，脚本只生成迁移脚本、执行模拟任务恢复/离线/超时/物理未知/消息重放测试，并在临时目录执行文件级备份恢复，不连接生产数据库或现场 PLC。报表/健康单元与集成测试通过。
+**Task 7.1 执行证据（2026-08-25）：** 新增 `ReportsController` 和 `IReportsReadModel` 内存只读快照，覆盖库存、库位利用率、入库/出库、移库、托盘追踪、盘点差异和设备报警；新增 `WarehouseHealthCheckService` 聚合 API、数据库、Worker、设备网关和 Outbox/Inbox 状态，并在 API DI 中注册开发安全默认实现。新增 [`docs/operations.md`](../../../docs/operations.md) 和 [`scripts/recovery-drill.ps1`](../../../scripts/recovery-drill.ps1)，脚本只生成迁移脚本、执行模拟任务恢复/离线/超时/物理未知/消息重放测试，并在临时目录执行文件级备份恢复，不连接生产数据库或现场 PLC。报表/健康单元与集成测试通过。后续修复 `32f2f09` 使 `scripts/verify.ps1` 自动发现 Docker Desktop 标准路径、等待容器内 `sqlcmd SELECT 1` 成功，并让 `WarehouseDbContextFactory` 使用 `ConnectionStrings__WmsDb`；在本机 Docker Desktop 29.2.0 上完整运行 `dotnet ef database update`、健康检查和旧目录保护，质量门禁退出码为 0。
 
 - 自动化状态：`AGENT_VERIFIED`。
 - 外部门禁：`HUMAN_PENDING`（报表口径、数据库备份保留期、恢复责任人和告警阈值尚未由运维负责人确认）；`FIELD_PENDING`（真实数据库恢复、PLC 离线/断电/急停、现场账实和网络恢复未执行）。

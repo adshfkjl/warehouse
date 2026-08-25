@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 3.7 |
+| 文档版本 | 3.8 |
 | 当前状态 | 需求与总体架构设计 |
 | 更新日期 | 2026-08-25 |
 | 系统定位 | 可脱离 ERP 独立运行的完整仓储管理系统（WMS） |
@@ -413,6 +413,8 @@ Task 7.1 增加只读报表 API：库存、库位利用率、入库/出库、移
 
 Task 7.1 增加 API、数据库、Worker、设备网关和 Outbox/Inbox 健康聚合接口。健康结果区分 `Healthy`、`Degraded` 和 `Unhealthy`；设备离线、数据库探针失败或消息重放不会自动释放物理资源。`docs/operations.md` 和 `scripts/recovery-drill.ps1` 规定仅使用开发配置、模拟网关和临时目录执行恢复演练，覆盖迁移脚本生成、文件备份恢复、Worker 重启、PLC 离线/超时/物理未知和消息重放；真实数据库恢复、PLC 异常和账实核对仍需人工/现场门禁。
 
+本地数据库验收通过 `ConnectionStrings__WmsDb` 向 EF Core 设计时工厂注入开发连接串；`scripts/verify.ps1` 可发现 PATH 或 Docker Desktop 标准目录中的 `docker.exe`，并在 SQL Server 容器内成功执行 readiness 查询后才运行迁移。该配置仅用于开发/测试数据库，不允许填入生产连接串。
+
 Task 7.2 增加 [`docs/pilot-runbook.md`](docs/pilot-runbook.md)、[`docs/rollback-runbook.md`](docs/rollback-runbook.md) 和 [`tests/Warehouse.DeviceGateway.ContractTests/FieldRegressionChecklist.md`](tests/Warehouse.DeviceGateway.ContractTests/FieldRegressionChecklist.md)，冻结只读监控、单库区双跑、受控试点、人工对账、急停/断网/断电/PLC 重启/服务重启、未知结果和人工接管顺序。现场试点必须有现场、仓储、设备/PLC、WMS 运维和安全负责人签字；在真实设备回归和账实核对前只能标记 `BLOCKED`/`FIELD_PENDING`，不得修改旧 PLC 时序或把模拟测试当作 `FIELD_VERIFIED`。
 
 ### 6.15 可选外部集成
@@ -561,3 +563,4 @@ Task 8.1 固化 `/api/integrations/v1` 契约：入库通知、出库请求、�
 | 2026-08-25 | 3.5 | 执行 Task 7.1：增加库存/库位利用率/入出库/移库/托盘追踪/盘点差异/设备报警报表 API、五类组件健康聚合、开发安全的恢复演练脚本和运维手册；明确当前内存报表读模型、模拟设备和 HUMAN/FIELD 门禁 | 报表、API、数据库、Worker、设备网关、Outbox/Inbox、恢复和运维 |
 | 2026-08-25 | 3.6 | 执行 Task 7.2：新增现场试运行手册、回滚手册和设备现场回归清单，明确只读监控、单库区双跑、人工对账、急停/断网/断电/重启/未知结果/人工接管、成功/停止/回滚条件、责任人和证据留存；真实现场签字保持 `BLOCKED`/`FIELD_PENDING` | 现场试点、回滚、设备回归、运维、库存对账和门禁 |
 | 2026-08-25 | 3.7 | 执行 Task 8.1：定义 v1 外部入库/出库/取消/状态/结果/库存同步接口，统一来源、版本、幂等键、关联号和 SHA-256 报文摘要；接收端写入可替换 Outbox，集成默认关闭且不影响手工 WMS | 外部集成、Outbox、幂等、API 契约和独立运行 |
+| 2026-08-25 | 3.8 | 修复本地质量门禁：支持 Docker Desktop 标准安装路径、等待 SQL Server 实际可查询，并让 EF 设计时工厂优先使用 `ConnectionStrings__WmsDb`；开发迁移和健康检查完整通过 | 开发环境、数据库迁移、Docker、质量门禁和运维文档 |
