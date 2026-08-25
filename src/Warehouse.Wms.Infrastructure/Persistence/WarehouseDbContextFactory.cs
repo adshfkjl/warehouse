@@ -7,8 +7,10 @@ public sealed class WarehouseDbContextFactory : IDesignTimeDbContextFactory<Ware
 {
     public WarehouseDbContext CreateDbContext(string[] args)
     {
+        var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__WmsDb")
+            ?? "Server=(localdb)\\MSSQLLocalDB;Database=WarehouseWmsDevelopment;Trusted_Connection=True;TrustServerCertificate=True";
         var options = new DbContextOptionsBuilder<WarehouseDbContext>()
-            .UseSqlServer("Server=(localdb)\\MSSQLLocalDB;Database=WarehouseWmsDevelopment;Trusted_Connection=True;TrustServerCertificate=True")
+            .UseSqlServer(connectionString)
             .Options;
 
         return new WarehouseDbContext(options);

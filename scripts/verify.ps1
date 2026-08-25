@@ -41,6 +41,39 @@ function Test-ExternalCommand {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Resolve-DockerCommand {
+    $command = Get-Command docker -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    $candidates = @(
+        (Join-Path ${env:ProgramFiles} "Docker\Docker\resources\bin\docker.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Docker\Docker\resources\bin\docker.exe")
+    )
+    return $candidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+}
+
+function Wait-ForSqlServer {
+    param(
+        [Parameter(Mandatory = $true)][string]$DockerCommand,
+        [int]$TimeoutSeconds = 120
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        & $DockerCommand exec warehouse-wms-test-db /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "WmsDevOnly!123" -C -Q "SET NOCOUNT ON; SELECT 1" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "SQL Server container is ready for client connections."
+            return
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    throw "SQL Server container did not become ready within $TimeoutSeconds seconds."
+}
+
 try {
     # STEP 1 - restore
     Write-Host "STEP 1 - restore"
@@ -62,14 +95,15 @@ try {
         Write-Host "Migration checks not applicable: no EF Core migrations exist in the current scaffold."
     }
     else {
-        $hasDocker = Test-ExternalCommand "docker"
+        $dockerCommand = Resolve-DockerCommand
+        $hasDocker = -not [string]::IsNullOrWhiteSpace($dockerCommand)
         $hasEf = Test-ExternalCommand "dotnet-ef"
 
         if (-not $hasDocker) {
-            Add-Blocked "Docker CLI is not installed; local database and migration checks cannot run."
+            Add-Blocked "Docker CLI was not found in PATH or standard Docker Desktop locations; local database and migration checks cannot run."
         }
         else {
-            & docker info --format "{{.ServerVersion}}" *> $null
+            & $dockerCommand info --format "{{.ServerVersion}}" *> $null
             if ($LASTEXITCODE -ne 0) {
                 Add-Blocked "Docker daemon is unavailable; local database and migration checks cannot run."
             }
@@ -80,8 +114,9 @@ try {
         }
 
         if ($blocked.Count -eq 0) {
-            Invoke-RequiredCommand docker @("compose", "-f", "docker-compose.dev.yml", "config") "docker compose config"
-            Invoke-RequiredCommand docker @("compose", "-f", "docker-compose.dev.yml", "up", "-d") "docker compose up"
+            Invoke-RequiredCommand $dockerCommand @("compose", "-f", "docker-compose.dev.yml", "config") "docker compose config"
+            Invoke-RequiredCommand $dockerCommand @("compose", "-f", "docker-compose.dev.yml", "up", "-d") "docker compose up"
+            Wait-ForSqlServer -DockerCommand $dockerCommand
             $env:ConnectionStrings__WmsDb = "Server=127.0.0.1,14333;Database=WmsIntegrationTest;User Id=sa;Password=WmsDevOnly!123;TrustServerCertificate=True"
             Invoke-RequiredCommand dotnet-ef @("database", "update", "--project", "src/Warehouse.Wms.Infrastructure", "--startup-project", "src/Warehouse.Wms.Api") "dotnet ef database update"
         }
