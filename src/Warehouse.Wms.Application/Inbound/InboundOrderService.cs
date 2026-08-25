@@ -152,10 +152,10 @@ public sealed class InboundOrderService
 
     public InboundLine AddLine(string orderNumber, InboundLineRequest request)
     {
-            ArgumentNullException.ThrowIfNull(request);
-            lock (_gate)
-            {
-                var order = GetOrder(orderNumber);
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_gate)
+        {
+            var order = GetOrder(orderNumber);
             var priorUpdatedAt = order.UpdatedAt;
             var line = order.AddLine(new InboundLine(
                 request.MaterialId,
