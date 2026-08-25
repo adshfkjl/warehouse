@@ -29,4 +29,13 @@ public sealed class LoadingPointCatalogTests
         Assert.True(restored.IsOccupied);
         Assert.True(restored.IsFaulted);
     }
+
+    [Fact]
+    public async Task Catalog_rejects_cancellation_before_query()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var catalog = new InMemoryLoadingPointCatalog(Array.Empty<OutboundLoadingPoint>());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => catalog.GetAsync(cancellation.Token));
+    }
 }
