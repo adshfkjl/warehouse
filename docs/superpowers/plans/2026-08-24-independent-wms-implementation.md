@@ -775,12 +775,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `docs/operations.md`
 - Create: `scripts/recovery-drill.ps1`
 
-- [ ] 实现库存、库位利用率、入出库、移库、托盘追踪、盘点差异和设备报警报表。
-- [ ] 增加 API、数据库、Worker、设备网关和 Outbox/Inbox 健康检查。
-- [ ] 演练数据库恢复、服务重启、模拟 PLC 离线、超时、未知结果和消息重放。
-- [ ] 运行统一本地验收命令、迁移命令、健康检查和恢复脚本。
+- [x] 实现库存、库位利用率、入出库、移库、托盘追踪、盘点差异和设备报警报表。
+- [x] 增加 API、数据库、Worker、设备网关和 Outbox/Inbox 健康检查。
+- [x] 演练数据库恢复、服务重启、模拟 PLC 离线、超时、未知结果和消息重放。
+- [x] 运行统一本地验收命令、迁移命令、健康检查和恢复脚本。
 
 **验收:** `AGENT_VERIFIED`；运维人员可判断各组件健康并完成无现场设备的恢复演练。
+
+**Task 7.1 执行证据（2026-08-25）：** 新增 `ReportsController` 和 `IReportsReadModel` 内存只读快照，覆盖库存、库位利用率、入库/出库、移库、托盘追踪、盘点差异和设备报警；新增 `WarehouseHealthCheckService` 聚合 API、数据库、Worker、设备网关和 Outbox/Inbox 状态，并在 API DI 中注册开发安全默认实现。新增 [`docs/operations.md`](../../../docs/operations.md) 和 [`scripts/recovery-drill.ps1`](../../../scripts/recovery-drill.ps1)，脚本只生成迁移脚本、执行模拟任务恢复/离线/超时/物理未知/消息重放测试，并在临时目录执行文件级备份恢复，不连接生产数据库或现场 PLC。报表/健康单元与集成测试通过。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（报表口径、数据库备份保留期、恢复责任人和告警阈值尚未由运维负责人确认）；`FIELD_PENDING`（真实数据库恢复、PLC 离线/断电/急停、现场账实和网络恢复未执行）。
+- 已知限制：报表读模型、健康探针默认值、Outbox/Inbox 重放计数和恢复证据为开发内存/临时文件契约；尚未接入 SQL 报表投影、真实 Worker 心跳存储、生产监控和真实设备报警采集。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 7.2：编写现场试运行和回滚手册
 

@@ -4,12 +4,16 @@ using Microsoft.IdentityModel.Tokens;
 using Warehouse.Wms.Application.Authorization;
 using Warehouse.Wms.Application.Identity;
 using Warehouse.Wms.Api.Identity;
+using Warehouse.Wms.Infrastructure.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
+builder.Services.AddSingleton<IReportsReadModel, InMemoryReportsReadModel>();
+builder.Services.AddSingleton<MessagingHealthState>();
+builder.Services.AddSingleton<WarehouseHealthCheckService>();
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? new JwtOptions(
