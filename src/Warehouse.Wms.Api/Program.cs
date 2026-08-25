@@ -80,11 +80,15 @@ if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
     }
 
     builder.Services.AddSqlServerInventoryPersistence(connectionString);
+    builder.Services.AddSingleton<ILoadingPointCatalog, SqlServerLoadingPointCatalog>();
     builder.Services.AddSingleton<InventoryService>(sp =>
         new InventoryService(sp.GetRequiredService<IInventoryLedgerStore>()));
 }
 else
 {
+    builder.Services.AddSingleton<ILoadingPointCatalog>(_ => new InMemoryLoadingPointCatalog([
+        new OutboundLoadingPoint(new Warehouse.Wms.Domain.MasterData.LoadingPoint(Guid.Parse("00000000-0000-0000-0000-000000000006"), "LP-DEV-01", "开发装载点"), false)
+    ]));
     builder.Services.AddSingleton<InventoryService>();
     builder.Services.AddSingleton<InMemoryTaskPersistenceStore>();
     builder.Services.AddSingleton<ITaskPersistenceStore>(sp => sp.GetRequiredService<InMemoryTaskPersistenceStore>());
@@ -112,7 +116,7 @@ builder.Services.AddSingleton<OutboundAllocationService>(sp => new OutboundAlloc
 builder.Services.AddSingleton<OutboundTaskService>(sp => new OutboundTaskService(
     sp.GetRequiredService<OutboundAllocationService>(),
     sp.GetRequiredService<WmsTaskScheduler>(),
-    [new OutboundLoadingPoint(new Warehouse.Wms.Domain.MasterData.LoadingPoint(Guid.Parse("00000000-0000-0000-0000-000000000006"), "LP-DEV-01", "开发装载点"), false)],
+    sp.GetRequiredService<ILoadingPointCatalog>(),
     sp.GetService<IResourceLockStore>(),
     sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddSingleton<OutboundReviewService>(sp => new OutboundReviewService(

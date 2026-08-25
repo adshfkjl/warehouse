@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.DeviceGateway;
 using Warehouse.Wms.Application.Inventory;
+using Warehouse.Wms.Application.Outbound;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Infrastructure.Integrations;
 using Warehouse.Wms.Infrastructure.Persistence;
@@ -73,6 +74,7 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
 
         Assert.IsType<SqlServerMessageStore>(scope.ServiceProvider.GetRequiredService<IOutboxMessageStore>());
         Assert.IsType<SqlServerIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
+        Assert.IsType<SqlServerLoadingPointCatalog>(scope.ServiceProvider.GetRequiredService<ILoadingPointCatalog>());
     }
 
     [SqlServerFact]

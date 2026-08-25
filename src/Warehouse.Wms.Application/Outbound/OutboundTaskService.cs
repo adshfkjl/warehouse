@@ -14,6 +14,23 @@ public sealed record OutboundLoadingPoint(
     bool IsDisabled = false,
     bool IsLocked = false);
 
+public interface ILoadingPointCatalog
+{
+    Task<IReadOnlyList<OutboundLoadingPoint>> GetAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed class InMemoryLoadingPointCatalog(IEnumerable<OutboundLoadingPoint> loadingPoints) : ILoadingPointCatalog
+{
+    private readonly IReadOnlyList<OutboundLoadingPoint> _loadingPoints = loadingPoints?.ToArray()
+        ?? throw new ArgumentNullException(nameof(loadingPoints));
+
+    public Task<IReadOnlyList<OutboundLoadingPoint>> GetAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_loadingPoints);
+    }
+}
+
 public sealed record OutboundTaskRequest(
     string TaskNumber,
     string DeviceId,
@@ -38,7 +55,7 @@ public sealed class OutboundTaskService
     private readonly WmsTaskScheduler _scheduler;
     private readonly OutboundAllocationService _allocations;
     private readonly IResourceLockStore? _resourceLockStore;
-    private readonly IReadOnlyList<OutboundLoadingPoint> _loadingPoints;
+    private readonly ILoadingPointCatalog _loadingPointCatalog;
     private readonly IBusinessWorkflowStore? _workflowStore;
     private readonly Dictionary<string, int> _workflowVersions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OutboundTaskResult> _tasks = new(StringComparer.Ordinal);
@@ -53,7 +70,21 @@ public sealed class OutboundTaskService
     {
         _allocations = allocations ?? throw new ArgumentNullException(nameof(allocations));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
-        _loadingPoints = loadingPoints?.ToArray() ?? throw new ArgumentNullException(nameof(loadingPoints));
+        _loadingPointCatalog = new InMemoryLoadingPointCatalog(loadingPoints);
+        _resourceLockStore = resourceLockStore;
+        _workflowStore = workflowStore;
+    }
+
+    public OutboundTaskService(
+        OutboundAllocationService allocations,
+        WmsTaskScheduler scheduler,
+        ILoadingPointCatalog loadingPointCatalog,
+        IResourceLockStore? resourceLockStore = null,
+        IBusinessWorkflowStore? workflowStore = null)
+    {
+        _allocations = allocations ?? throw new ArgumentNullException(nameof(allocations));
+        _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
+        _loadingPointCatalog = loadingPointCatalog ?? throw new ArgumentNullException(nameof(loadingPointCatalog));
         _resourceLockStore = resourceLockStore;
         _workflowStore = workflowStore;
     }
@@ -89,7 +120,7 @@ public sealed class OutboundTaskService
             }
         }
 
-        var loadingPoint = _loadingPoints.FirstOrDefault(item => item.LoadingPoint.Id == request.LoadingPointId)
+        var loadingPoint = (await _loadingPointCatalog.GetAsync(cancellationToken)).FirstOrDefault(item => item.LoadingPoint.Id == request.LoadingPointId)
             ?? throw new KeyNotFoundException($"Loading point '{request.LoadingPointId}' was not found.");
         if (loadingPoint.IsOccupied || loadingPoint.IsFaulted || loadingPoint.IsDisabled || loadingPoint.IsLocked || loadingPoint.LoadingPoint.IsDisabled)
             throw new InvalidOperationException($"Loading point '{loadingPoint.LoadingPoint.Code}' is not available for outbound.");
