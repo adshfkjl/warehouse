@@ -821,12 +821,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `docs/integration-contract.md`
 - Test: `tests/Warehouse.Wms.IntegrationTests/Integrations/`
 
-- [ ] 定义版本化入库通知、出库请求、取消请求、状态查询、结果回传和库存同步接口。
-- [ ] 每个请求包含来源、版本、幂等键和原始报文摘要。
-- [ ] 用 Outbox/待同步队列处理失败重试，不能重复执行 PLC 作业。
-- [ ] 关闭集成适配器后验证手工建单和本地仓储作业仍正常运行。
+- [x] 定义版本化入库通知、出库请求、取消请求、状态查询、结果回传和库存同步接口。
+- [x] 每个请求包含来源、版本、幂等键和原始报文摘要。
+- [x] 用 Outbox/待同步队列处理失败重试，不能重复执行 PLC 作业。
+- [x] 关闭集成适配器后验证手工建单和本地仓储作业仍正常运行。
 
 **验收:** `AGENT_VERIFIED`；ERP/MES 是可插拔客户端，不是 WMS 启动和运行前提。
+
+**Task 8.1 执行证据（2026-08-25）：** 新增 Application 集成契约和命令服务、Infrastructure 开发内存 Outbox、API `/api/integrations/v1/*` 六类端点、集成契约文档及单元/集成测试。请求强制来源、`v1`、幂等键和原始 payload SHA-256 摘要；重复键返回 `AlreadyQueued`，不会生成第二条 Outbox，也不会直接创建 WMS 单据或 PLC 任务。集成默认关闭时返回 `404 INTEGRATION_DISABLED`，本地流程不受影响。生产启用前仍需接入 SQL Server Outbox 发布器和真实外部系统契约回归。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（外部字段映射、调用方身份和发布 SLA 尚未确认）；`FIELD_PENDING`（真实 ERP/MES 未连接，未执行现场联调）。
+- 已知限制：当前 Outbox 为开发内存实现，未连接外部系统，不代表生产消息可靠性或业务字段映射已确认。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 十二、阶段门禁和最终标准
 

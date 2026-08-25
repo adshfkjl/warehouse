@@ -5,6 +5,8 @@ using Warehouse.Wms.Application.Authorization;
 using Warehouse.Wms.Application.Identity;
 using Warehouse.Wms.Api.Identity;
 using Warehouse.Wms.Infrastructure.Health;
+using Warehouse.Wms.Application.Integrations;
+using Warehouse.Wms.Infrastructure.Integrations;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +16,12 @@ builder.Services.AddControllers();
 builder.Services.AddSingleton<IReportsReadModel, InMemoryReportsReadModel>();
 builder.Services.AddSingleton<MessagingHealthState>();
 builder.Services.AddSingleton<WarehouseHealthCheckService>();
+builder.Services.AddSingleton<InMemoryIntegrationOutbox>();
+builder.Services.AddSingleton<IIntegrationOutbox>(sp => sp.GetRequiredService<InMemoryIntegrationOutbox>());
+builder.Services.AddSingleton<IIntegrationCommandService>(sp =>
+    new IntegrationCommandService(
+        sp.GetRequiredService<IIntegrationOutbox>(),
+        builder.Configuration.GetValue("Wms:ExternalIntegrationsEnabled", false)));
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? new JwtOptions(
