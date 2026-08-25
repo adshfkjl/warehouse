@@ -2,24 +2,56 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Warehouse.Wms.Application.Authorization;
+using Warehouse.Wms.Application.Devices;
+using Warehouse.Wms.Application.Exceptions;
 using Warehouse.Wms.Application.Identity;
 using Warehouse.Wms.Application.Import;
 using Warehouse.Wms.Application.Inbound;
 using Warehouse.Wms.Application.Inventory;
 using Warehouse.Wms.Application.Outbound;
+using Warehouse.Wms.Application.Relocation;
+using Warehouse.Wms.Application.Stocktaking;
+using Warehouse.Wms.Application.Tasks;
 using Warehouse.Wms.Api.Identity;
+using Warehouse.Wms.DeviceGateway;
+using Warehouse.Wms.Domain.Devices;
 using Warehouse.Wms.Infrastructure.Health;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Infrastructure.Integrations;
+
+using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
+
+// The development host is deliberately composed with the simulated gateway.
+// A real PLC adapter is opt-in and must be supplied by a separately reviewed
+// deployment configuration; the WMS API never writes PLC registers directly.
+builder.Services.AddSingleton<SimulatedDeviceGateway>();
+builder.Services.AddSingleton<IWarehouseDeviceGateway>(sp => sp.GetRequiredService<SimulatedDeviceGateway>());
+builder.Services.AddSingleton<TaskSchedulerState>();
+builder.Services.AddSingleton<WmsTaskScheduler>(sp => new WmsTaskScheduler(
+    sp.GetRequiredService<IWarehouseDeviceGateway>(),
+    DeviceCapability.TaskKeyDeduplication | DeviceCapability.TaskQuery | DeviceCapability.StopControl,
+    sp.GetRequiredService<TaskSchedulerState>()));
+
 builder.Services.AddSingleton<InventoryService>();
 builder.Services.AddSingleton<InboundOrderService>();
+builder.Services.AddSingleton<PutawayAllocationService>();
+builder.Services.AddSingleton<PutawayTaskService>();
+builder.Services.AddSingleton<InboundReconciliationService>();
 builder.Services.AddSingleton<OutboundAllocationService>();
+builder.Services.AddSingleton<OutboundTaskService>();
+builder.Services.AddSingleton<OutboundReviewService>();
+builder.Services.AddSingleton<RelocationService>();
+builder.Services.AddSingleton<StocktakingService>();
+builder.Services.AddScoped<StocktakingDifferenceService>();
+builder.Services.AddScoped<ExceptionWorkItemService>();
+builder.Services.AddScoped<PhysicalResultConfirmationService>();
+builder.Services.AddSingleton<TaskCancellationService>();
 builder.Services.AddSingleton<SpreadsheetImportService>();
 builder.Services.AddSingleton<IReportsReadModel, InMemoryReportsReadModel>();
 builder.Services.AddSingleton<MessagingHealthState>();

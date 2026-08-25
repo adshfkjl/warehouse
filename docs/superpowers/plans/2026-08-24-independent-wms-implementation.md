@@ -841,6 +841,28 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 已知限制：当前 Outbox 为开发内存实现，未连接外部系统，不代表生产消息可靠性或业务字段映射已确认。
 - 旧系统：`warehouse/` 仅作只读参考，未修改。
 
+### Task 8.2：修复 API 运行时组合和控制器依赖门禁
+
+**Files:**
+- Modify: `src/Warehouse.Wms.Api/Program.cs`
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Composition/ApiCompositionTests.cs`
+- Modify: `PROJECT_DESIGN.md`
+
+- [x] 默认注册 `SimulatedDeviceGateway`，通过 `IWarehouseDeviceGateway` 注入统一任务调度器；不连接真实 PLC。
+- [x] 注册入库、出库、移库、盘点、异常、报表和导入控制器所需的完整应用服务组合。
+- [x] 依赖当前 HTTP 用户的服务使用请求作用域，避免单例捕获 scoped 依赖。
+- [x] 通过真实 `WebApplicationFactory` 启动 API，解析所有 MVC 控制器，并断言网关实现为模拟网关。
+
+**验收:** `AGENT_VERIFIED`；API 在无 ERP、无真实 PLC 和无生产连接串时可启动，所有控制器构造依赖可解析；真实设备适配器未被默认启用。
+
+**Task 8.2 执行证据（2026-08-25）：** `Program.cs` 新增模拟网关、任务调度器、入库/出库/移库/盘点/异常及相关应用服务注册；`ExceptionWorkItemService`、`StocktakingDifferenceService` 和人工确认服务按请求作用域注册。新增 `ApiCompositionTests` 使用 `WebApplicationFactory<Program>` 启动 API，检查 `/health/live`、解析所有控制器并断言 `IWarehouseDeviceGateway` 为 `SimulatedDeviceGateway`。先运行测试确认缺少网关注册的预期失败，再完成最小 DI 修复后通过。
+
+- 自动化状态：`AGENT_VERIFIED`（组合测试和完整质量门禁需在提交前重新执行）。
+- 外部门禁：`HUMAN_PENDING`（生产部署配置和真实设备启用审批待负责人确认）；`FIELD_PENDING`（真实 PLC 未连接，未执行现场回归）。
+- 已知限制：当前部分业务服务仍使用开发内存实现，默认候选库位/装载点为空；本 Task 只保证运行时依赖可解析，不替代业务数据初始化和现场验证。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
+
 ## 十二、阶段门禁和最终标准
 
 ### 12.1 阶段门禁
