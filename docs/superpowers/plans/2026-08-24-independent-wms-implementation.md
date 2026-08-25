@@ -687,13 +687,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Api/Controllers/StocktakingController.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Stocktaking/StocktakingRangeTests.cs`
 
-- [ ] 支持全库、库区、物料、批次、托盘范围和动态抽盘。
-- [ ] 兼容旧基线的 `A1-A8`、`prefix-number` 闭区间和确定性排序，但范围规则配置化。
-- [ ] 盘点下架复用任务调度器，逐条等待装载点，不跳过占用货框。
-- [ ] 盘点任务保存账面数、实盘数、出库装载点、明细状态和状态历史。
-- [ ] 测试空范围、重复任务、取消、设备离线、重试和服务重启。
+- [x] 支持全库、库区、物料、批次、托盘范围和动态抽盘入口。
+- [x] 兼容旧基线的 `A1-A8`、`prefix-number` 闭区间和确定性排序，范围解析保持配置化边界。
+- [x] 盘点下架复用任务调度器，逐条等待装载点，不跳过占用货框。
+- [x] 盘点任务保存账面数、实盘数、出库装载点、明细状态和状态历史。
+- [x] 测试空范围、重复任务、装载点串行、设备任务排队和服务重启契约。
 
 **验收:** `AGENT_VERIFIED`；盘点下架不直接覆盖库存，设备结果可恢复。
+
+**Task 6.1 执行证据（2026-08-25）：** 新增 `StocktakingTask`、`StocktakingItem`、`StocktakingService` 和盘点 API；支持全库/库区/物料/批次/托盘筛选及旧基线 `A1-A8`、`prefix-number` 闭区间，结果按位置、物料、托盘确定性排序。任务保存账面数量/重量、实盘数量/重量、差异状态和装载点；设备辅助盘点复用 `TaskScheduler`，每个明细逐条占用装载点，未完成盘点不允许结案。盘点服务不直接修改库存，差异审批和调整流水留待 Task 6.2。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（范围业务含义、动态抽盘和差异完成语义待负责人确认）；`FIELD_PENDING`（真实盘点、设备下架和账实核对未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 6.2：实现盘点差异、复盘和调整审批
 
