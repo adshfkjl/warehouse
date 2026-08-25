@@ -24,7 +24,8 @@ public sealed record PutawayTaskResult(
     WarehouseTask Task,
     DeviceTask DeviceTask,
     IReadOnlyList<ResourceLock> ResourceLocks,
-    TaskDispatchResult? DispatchResult);
+    TaskDispatchResult? DispatchResult,
+    PendingInboundInventory? PendingInventory = null);
 
 /// <summary>
 /// Creates the WMS putaway task and submits it through TaskScheduler. This
@@ -60,6 +61,17 @@ public sealed class PutawayTaskService
     public IReadOnlyCollection<ResourceLock> ResourceLocks
     {
         get { lock (_gate) return _locks.ToArray(); }
+    }
+
+    public PutawayTaskResult Get(string taskNumber)
+    {
+        var normalized = Require(taskNumber, nameof(taskNumber));
+        lock (_gate)
+        {
+            return _byTaskNumber.TryGetValue(normalized, out var result)
+                ? result
+                : throw new KeyNotFoundException($"Putaway task '{normalized}' was not found.");
+        }
     }
 
     public async Task<PutawayTaskResult> CreateAndQueueAsync(
@@ -130,7 +142,7 @@ public sealed class PutawayTaskService
                 request.Priority,
                 request.MaxAttempts);
             await _scheduler.EnqueueAsync(dispatchRequest, cancellationToken);
-            var result = new PutawayTaskResult(allocation, task, deviceTask, locks, null);
+            var result = new PutawayTaskResult(allocation, task, deviceTask, locks, null, pendingInventory);
             lock (_gate)
             {
                 _byIdempotencyKey.Add(idempotencyKey, result);
