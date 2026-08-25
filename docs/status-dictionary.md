@@ -6,9 +6,9 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `1.4` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `3.1` |
-| 自动化状态 | `AGENT_VERIFIED`（Task 4.5 异常工作项和处置测试已通过） |
+| 词典版本 | `1.5` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `3.2` |
+| 自动化状态 | `AGENT_VERIFIED`（Task 4.5 异常工作项和 Task 6.2 盘点差异审批测试已通过） |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
 
@@ -132,7 +132,9 @@ Draft -> Pending -> Running -> Completed
 - `OutboundStatus`：`Pending` -> `Running` -> `Succeeded`/`Failed`/`Canceled`。
 - `InboundStatus`：`NotReady` -> `Ready` -> `Scheduled` -> `Running` -> `Succeeded`/`Failed`；未完成下架的明细不得预约上架。
 - `Scheduled` 只表示已预约/已发送，不表示 PLC 已完成。
-- 盘点差异不得直接改余额；必须经过复盘、授权和库存调整流水。
+- 盘点差异不得直接改余额；必须经过复盘、二次授权和库存调整流水。调整工作项使用 `PendingReview`、`RecountRequired`、`Approved`、`Rejected`、`Applied` 状态；重复确认按调整编号幂等，库存应用失败保留 `Approved`，不得产生部分流水。
+- 明盘允许操作员看到账面值，盲盘操作员视图不得返回账面数量/重量，但审批实体必须保存完整账面值。`FreezeOnDifference` 策略下，待审批和复盘中的差异保持冻结，只有应用或明确拒绝后解除。
+- 盘点移动托盘的上架预约按盘点明细幂等；`Reserved`/`Sent` 只代表预约或已发送，只有设备结果确认后才进入 `Completed`，不得用发送状态替代设备完成。
 
 ## 7. 库存状态
 

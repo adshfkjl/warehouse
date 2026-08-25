@@ -708,12 +708,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Domain/Stocktaking/StocktakingAdjustment.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Stocktaking/StocktakingDifferenceTests.cs`
 
-- [ ] 支持明盘、盲盘、复盘、差异原因和冻结策略。
-- [ ] 差异必须经授权确认后生成库存调整流水，不能直接更新余额。
-- [ ] 对移动托盘的上架预约逐条幂等执行，区分“已发送”和“设备完成”。
-- [ ] 测试重复确认、未授权调整、差异复盘和调整回滚。
+- [x] 支持明盘、盲盘、复盘、差异原因和冻结策略。
+- [x] 差异必须经授权确认后生成库存调整流水，不能直接更新余额。
+- [x] 对移动托盘的上架预约逐条幂等执行，区分“已发送”和“设备完成”。
+- [x] 测试重复确认、未授权调整、差异复盘和调整回滚。
 
 **验收:** `AGENT_VERIFIED`；差异有完整审批、流水和审计记录。
+
+**Task 6.2 执行证据（2026-08-25）：** 新增 `StocktakingAdjustment`、`StocktakingDifferenceService` 和差异单元测试。服务支持明盘/盲盘操作员视图、复盘替换、`FreezeOnDifference` 冻结策略、差异原因、二次授权和审计轨迹；授权通过后唯一调用 `InventoryService.AdjustAsync`，以调整 ID 作为幂等作用域，重复确认不重复写库存流水，库存调整失败保持 `Approved` 且不产生部分流水，后续可重试。移动托盘上架预约按任务/明细幂等创建，状态严格区分 `Reserved`、`Sent`、`Completed`。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（明盘/盲盘和冻结策略的现场操作含义待负责人确认）；`FIELD_PENDING`（真实盘点、设备发送/完成和账实核对未执行）。
+- 已知限制：当前差异工作项、冻结标记和上架预约为内存实现；尚未接入 SQL Server 持久化、真实库位 ID 映射、Outbox/Inbox 和现场设备回执。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 6.3：补全认证、权限和审计
 
