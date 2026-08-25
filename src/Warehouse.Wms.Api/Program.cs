@@ -37,7 +37,9 @@ builder.Services.AddSingleton<TaskSchedulerState>();
 builder.Services.AddSingleton<WmsTaskScheduler>(sp => new WmsTaskScheduler(
     sp.GetRequiredService<IWarehouseDeviceGateway>(),
     DeviceCapability.TaskKeyDeduplication | DeviceCapability.TaskQuery | DeviceCapability.StopControl,
-    sp.GetRequiredService<TaskSchedulerState>()));
+    sp.GetRequiredService<TaskSchedulerState>(),
+    sp.GetService<ITaskCommandOutbox>(),
+    builder.Configuration["Wms:SchedulerWorkerId"]));
 
 var persistenceMode = builder.Configuration["Wms:PersistenceMode"] ?? "InMemory";
 if (!persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase)

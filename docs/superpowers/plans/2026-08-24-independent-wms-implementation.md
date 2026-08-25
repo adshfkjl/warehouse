@@ -771,6 +771,53 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 已知限制：当前 Web 是静态 API 壳，尚未接入完整 API 数据查询、真实登录页、持久化用户目录和现场设备状态；页面不能替代现场试运行。
 - 旧系统：`warehouse/` 仅作只读参考，未修改。
 
+### Task 6.5：冻结作业优先工作台和实时查询交互设计
+
+**前置条件:** Task 6.4 的页面壳和旧程序功能盘点已完成；本 Task 只产出设计规格和实施拆分，不修改 Web 代码、不接入真实设备。
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-08-25-wms-statistics-point-view-design.md`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/user-guide.md`（实现阶段补充操作说明）
+
+- [ ] 固化“作业优先 + 轻量实时监控”工作台：核心作业待办、快捷入口、任务队列为主区域，PLC/设备/装载点/告警为只读辅助区域。
+- [ ] 固化角色化入口、任务状态、数据新鲜度、异常和物理未知展示，不允许监控卡片直接写 PLC 或修改库存。
+- [ ] 固化按仓库/库区/巷道/货架/层/库位查看实时物品的二维点位视图、详情抽屉、托盘反向定位和过期/离线/锁定显示。
+- [ ] 固化统计页面的 KPI、趋势、利用率、任务状态和盘点差异图表，以及小时/日/周/月周期、幂等汇总、失败保留上次成功结果和明细跳转规则。
+- [ ] 形成后续实现 Task 的文件范围、接口契约、读模型边界和测试清单。
+
+**验收:** `AGENT_VERIFIED`；设计书、交互规格和实施计划一致，未提前修改 Web 代码或声称真实点位/统计口径已确认。
+
+**执行证据（2026-08-25）:** 已新增 [`docs/superpowers/specs/2026-08-25-wms-statistics-point-view-design.md`](../../../docs/superpowers/specs/2026-08-25-wms-statistics-point-view-design.md)，并同步更新 `PROJECT_DESIGN.md` 版本 3.14 和需求变更记录。视觉 companion 已确认工作台采用“作业优先 + 轻量实时监控”；统计和点位实现暂不执行，保留后续 Task。
+
+- 自动化状态：`AGENT_VERIFIED`（文档一致性和范围检查通过）。
+- 外部门禁：`HUMAN_PENDING`（统计口径、角色指标、数据新鲜度阈值和点位状态颜色语义待负责人确认）；`FIELD_PENDING`（真实点位、设备报警和现场数据刷新能力未验证）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
+
+### Task 6.6：实现统计分析与实时点位查询（后续执行）
+
+**前置条件:** Task 6.5 通过设计验收；Task 9.x 的业务账和消息边界保持通过；不得连接生产 PLC 或生产数据库。
+
+**目标:** 实现统计汇总、可视化读模型、仓库点位查询和管理 Web 交互；所有查询只读，不改变库存、任务或 PLC 时序。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Application/Reports/`、`src/Warehouse.Wms.Application/Warehouse/`
+- `src/Warehouse.Wms.Infrastructure/Reports/`、`src/Warehouse.Wms.Infrastructure/Warehouse/`
+- `src/Warehouse.Wms.Api/Controllers/ReportsController.cs` 及点位查询控制器
+- `src/Warehouse.Wms.Web/` 统计、工作台和点位视图页面
+- `tests/Warehouse.Wms.UnitTests/Reports/`、`tests/Warehouse.Wms.IntegrationTests/Reports/`、`tests/Warehouse.Wms.IntegrationTests/Web/`
+- `PROJECT_DESIGN.md`、`docs/user-guide.md`、必要的 API 契约和运维说明
+
+**必须完成:**
+- [ ] 建立库存、入库、出库、移库、盘点差异、设备任务成功率和异常数量的周期汇总模型；周期、范围、来源版本和幂等键唯一。
+- [ ] 增加可配置小时/日/周/月统计调度；重复执行安全重放，失败不覆盖上次成功汇总，并提供数据生成时间和新鲜度。
+- [ ] 增加 KPI、趋势、利用率、任务状态分布和盘点差异只读 API，支持按仓库/库区/时间/任务类型筛选和跳转明细。
+- [ ] 增加按仓库/库区/巷道/货架/层/库位筛选的点位快照 API，显示托盘、物料、批次/有效期、数量、重量、锁定、任务和设备观察信息。
+- [ ] 增加二维货架网格、库位详情抽屉和托盘反向定位；轮询和未来回调统一使用观察版本/Inbox 去重，过期或物理未知不得显示为空闲。
+- [ ] 补充统计幂等、失败保留、点位版本、空间筛选、权限、只读边界和页面跳转测试；不得直接写寄存器或修改 `warehouse/`。
+
+**验收:** `AGENT_VERIFIED`；模拟数据下图表、周期汇总、点位查询和页面交互通过，API 无 ERP/真实 PLC 仍可启动；`HUMAN_PENDING`/`FIELD_PENDING` 保留真实统计口径、刷新阈值、点位映射和设备报警语义确认。
+
 ## 十、阶段 7：报表、运维和现场试运行
 
 ### Task 7.1：实现报表、健康检查和恢复演练
@@ -944,6 +991,37 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **自动化状态:** `AGENT_VERIFIED`（待主代理独立复验）。
 **外部门禁:** `HUMAN_PENDING`（生产集成启用和消息运维策略待负责人确认）；`FIELD_PENDING`（真实外部系统、设备消息语义和现场恢复未验证）。
 **已知风险:** SQL outbox 已接入入口但尚无发布 Worker；跨进程发布、消息失败重试与外部系统回执仍需后续任务验证。摘要冲突由 SQL 消息仓储拒绝，生产幂等键范围和保留策略仍需确认。
+
+### Task 9.4：设备命令 Outbox 前置持久化边界
+
+**前置条件:** Task 4.3、9.2A 和 9.3 已达到 `AGENT_VERIFIED`；开发 SQL Server 容器可用；不得连接生产 PLC 或数据库。
+
+**目标:** 调度器调用设备网关前先通过可选 Outbox 写入并 claim 设备命令；设备等待期间不持有数据库事务；确定性响应发布成功，失败或物理未知命令不得自动重发。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Application/Tasks/TaskCommandOutbox.cs`
+- `src/Warehouse.Wms.Application/Tasks/TaskScheduler.cs`
+- `src/Warehouse.Wms.Infrastructure/Persistence/SqlServerTaskCommandOutbox.cs`
+- `src/Warehouse.Wms.Infrastructure/Persistence/InventoryPersistenceServiceCollectionExtensions.cs`
+- `src/Warehouse.Wms.Api/Program.cs`
+- `tests/Warehouse.Wms.UnitTests/Tasks/TaskSchedulerTests.cs`
+- `PROJECT_DESIGN.md`、本计划和必要的状态说明
+
+**必须完成:**
+- [x] 设备调用前以任务幂等键写入并抢占 Outbox，claim、设备调用、发布/失败的顺序可测试。
+- [x] 设备调用期间不持有数据库事务；Accepted、Executing 或 Succeeded 等确定性响应标记 Published。
+- [x] 超时、异常、响应幂等键不匹配和 PhysicalStateUnknown 标记失败且 `nextAttemptAt=DateTimeOffset.MaxValue`，不得自动重发未知命令。
+- [x] 无 Outbox 的内存测试和现有调度器构造方式保持兼容；SQL 模式注册 `SqlServerTaskCommandOutbox`。
+- [x] 不实现完整任务实体 SQL 持久化、跨进程发布 Worker、重启后的命令恢复或现场 PLC 验证。
+
+**验收:** `AGENT_VERIFIED`；TaskScheduler 定向测试、完整构建、全量测试、Docker 迁移、健康检查和旧目录保护通过。
+
+**Task 9.4 执行证据（2026-08-25）：** 新增 `ITaskCommandOutbox`、命令序列化和 SQL 适配器；`TaskScheduler` 支持设备调用前 claim、确定性响应后 Published、失败/物理未知不可重发，并通过 `Wms:SchedulerWorkerId` 注入 Worker 标识。新增顺序和未知命令不重试测试。主代理独立验证：`dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、Docker SQL Server 迁移、`pwsh -NoProfile -File scripts/verify.ps1` 全部通过；104 个单元、38 个集成（4 个 SQL fixture 未配置连接时跳过）和 37 个设备契约测试通过；健康端点 200；`git diff --name-only -- warehouse` 为空。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（任务命令重试策略、生产 Worker 标识和消息保留待运维确认）；`FIELD_PENDING`（真实旧 PLC 任务号去重/查询、断网/重启和物理结果未验证）。
+- 已知限制：任务实体、资源锁和命令发布 Worker 尚未完成 SQL 持久化/跨进程恢复；未知命令仍需设备对账或人工确认后处置。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 十三、阶段门禁和最终标准
 

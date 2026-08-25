@@ -65,19 +65,33 @@ public sealed class TaskSchedulerState
 
 public sealed class TaskScheduler
 {
+    private static readonly TimeSpan DefaultOutboxLease = TimeSpan.FromMinutes(2);
     private readonly object _gate = new();
     private readonly IWarehouseDeviceGateway _gateway;
     private readonly DeviceCapability _capabilities;
     private readonly TaskSchedulerState _state;
+    private readonly ITaskCommandOutbox? _commandOutbox;
+    private readonly string _workerId;
+    private readonly TimeSpan _outboxLease;
 
     public TaskScheduler(
         IWarehouseDeviceGateway gateway,
         DeviceCapability capabilities = DeviceCapability.TaskKeyDeduplication | DeviceCapability.TaskQuery,
-        TaskSchedulerState? state = null)
+        TaskSchedulerState? state = null,
+        ITaskCommandOutbox? commandOutbox = null,
+        string? workerId = null,
+        TimeSpan? outboxLease = null)
     {
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _capabilities = capabilities;
         _state = state ?? new TaskSchedulerState();
+        _commandOutbox = commandOutbox;
+        _workerId = string.IsNullOrWhiteSpace(workerId) ? Environment.MachineName + ":scheduler" : workerId.Trim();
+        _outboxLease = outboxLease ?? DefaultOutboxLease;
+        if (_outboxLease <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(outboxLease), _outboxLease, "Outbox lease must be positive.");
+        }
     }
 
     public Task EnqueueAsync(TaskDispatchRequest request, CancellationToken cancellationToken = default)
@@ -155,6 +169,28 @@ public sealed class TaskScheduler
             throw;
         }
 
+        TaskCommandOutboxClaim? commandClaim = null;
+        if (_commandOutbox is not null)
+        {
+            commandClaim = await _commandOutbox.EnqueueAndClaimAsync(
+                request.DeviceTask,
+                request.OperationKind,
+                _workerId,
+                DateTimeOffset.UtcNow,
+                _outboxLease,
+                cancellationToken);
+            if (commandClaim is null)
+            {
+                lock (_gate)
+                {
+                    request.Task.TransitionTo(TaskState.Queued, "scheduler", "device command is already claimed or published", "COMMAND_NOT_DISPATCHABLE");
+                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                }
+
+                return null;
+            }
+        }
+
         DeviceOperationResult result;
         try
         {
@@ -168,6 +204,10 @@ public sealed class TaskScheduler
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (commandClaim is not null)
+            {
+                await _commandOutbox!.MarkFailedAsync(commandClaim, "DISPATCH_CANCELED", DateTimeOffset.UtcNow, DateTimeOffset.MaxValue, CancellationToken.None);
+            }
             lock (_gate)
             {
                 request.Task.TransitionTo(TaskState.TimedOut, "scheduler", "device call canceled before result", "DISPATCH_CANCELED");
@@ -178,6 +218,10 @@ public sealed class TaskScheduler
         }
         catch (Exception exception)
         {
+            if (commandClaim is not null)
+            {
+                await _commandOutbox!.MarkFailedAsync(commandClaim, exception.Message, DateTimeOffset.UtcNow, DateTimeOffset.MaxValue, CancellationToken.None);
+            }
             lock (_gate)
             {
                 request.Task.TransitionTo(TaskState.TimedOut, "scheduler", "device call failed without a definitive result", "DEVICE_CALL_UNKNOWN");
@@ -192,62 +236,91 @@ public sealed class TaskScheduler
                 exception.Message);
         }
 
+        TaskDispatchResult dispatchResult;
+        var markPublished = false;
+        string? outboxFailure = null;
+        var nextAttemptAt = DateTimeOffset.MaxValue;
         lock (_gate)
         {
             if (!string.Equals(result.IdempotencyKey, request.DeviceTask.IdempotencyKey, StringComparison.Ordinal))
             {
                 request.Task.TransitionTo(TaskState.TimedOut, "scheduler", "device response idempotency key mismatch", "DEVICE_IDEMPOTENCY_MISMATCH");
                 request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "scheduler", "physical result requires reconciliation", "PHYSICAL_UNKNOWN");
-                return new TaskDispatchResult(
+                outboxFailure = "DEVICE_IDEMPOTENCY_MISMATCH";
+                dispatchResult = new TaskDispatchResult(
                     request,
                     DeviceOperationStatus.PhysicalStateUnknown,
                     request.DeviceTaskNumber,
                     "DEVICE_IDEMPOTENCY_MISMATCH",
                     "The device response did not match the submitted command.");
             }
-
-            if (result.Status == DeviceOperationStatus.Accepted)
+            else
             {
-                request.DeviceTaskNumber = result.DeviceTaskNumber;
-                request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted command");
-            }
-            else if (result.Status == DeviceOperationStatus.Executing)
-            {
-                request.DeviceTaskNumber = result.DeviceTaskNumber;
-                request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted command");
-                request.Task.TransitionTo(TaskState.Executing, "gateway", "device execution reported");
-            }
-            else if (result.Status == DeviceOperationStatus.Succeeded)
-            {
-                request.DeviceTaskNumber = result.DeviceTaskNumber;
-                request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted and completed command");
-                request.Task.TransitionTo(TaskState.Executing, "gateway", "device completion reported");
-                request.Task.TransitionTo(TaskState.Succeeded, "gateway", "device completed");
-                _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
-            }
-            else if (result.Status is DeviceOperationStatus.PhysicalStateUnknown or DeviceOperationStatus.TimedOut or DeviceOperationStatus.Unknown)
-            {
-                request.Task.TransitionTo(TaskState.TimedOut, "scheduler", "dispatch result cannot be confirmed", result.ErrorCode);
-                request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "scheduler", "physical result requires reconciliation", result.ErrorCode);
-            }
-            else if (result.Status is DeviceOperationStatus.Failed or DeviceOperationStatus.Offline)
-            {
-                if (request.AttemptCount < request.MaxAttempts
-                    && _capabilities.HasFlag(DeviceCapability.TaskKeyDeduplication)
-                    && _capabilities.HasFlag(DeviceCapability.TaskQuery))
+                if (result.Status == DeviceOperationStatus.Accepted)
                 {
-                    request.Task.TransitionTo(TaskState.Queued, "scheduler", "dispatch will be retried", result.ErrorCode);
-                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    request.DeviceTaskNumber = result.DeviceTaskNumber;
+                    request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted command");
+                    markPublished = true;
                 }
-                else
+                else if (result.Status == DeviceOperationStatus.Executing)
                 {
-                    request.Task.TransitionTo(TaskState.Failed, "scheduler", "dispatch failed", result.ErrorCode);
-                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    request.DeviceTaskNumber = result.DeviceTaskNumber;
+                    request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted command");
+                    request.Task.TransitionTo(TaskState.Executing, "gateway", "device execution reported");
+                    markPublished = true;
                 }
-            }
+                else if (result.Status == DeviceOperationStatus.Succeeded)
+                {
+                    request.DeviceTaskNumber = result.DeviceTaskNumber;
+                    request.Task.TransitionTo(TaskState.SentToPlc, "gateway", "device accepted and completed command");
+                    request.Task.TransitionTo(TaskState.Executing, "gateway", "device completion reported");
+                    request.Task.TransitionTo(TaskState.Succeeded, "gateway", "device completed");
+                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    markPublished = true;
+                }
+                else if (result.Status is DeviceOperationStatus.PhysicalStateUnknown or DeviceOperationStatus.TimedOut or DeviceOperationStatus.Unknown)
+                {
+                    request.Task.TransitionTo(TaskState.TimedOut, "scheduler", "dispatch result cannot be confirmed", result.ErrorCode);
+                    request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "scheduler", "physical result requires reconciliation", result.ErrorCode);
+                    outboxFailure = result.ErrorCode ?? result.Status.ToString();
+                }
+                else if (result.Status is DeviceOperationStatus.Failed or DeviceOperationStatus.Offline)
+                {
+                    var retryable = request.AttemptCount < request.MaxAttempts
+                        && _capabilities.HasFlag(DeviceCapability.TaskKeyDeduplication)
+                        && _capabilities.HasFlag(DeviceCapability.TaskQuery);
+                    if (retryable)
+                    {
+                        request.Task.TransitionTo(TaskState.Queued, "scheduler", "dispatch will be retried", result.ErrorCode);
+                        _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                        nextAttemptAt = DateTimeOffset.UtcNow;
+                    }
+                    else
+                    {
+                        request.Task.TransitionTo(TaskState.Failed, "scheduler", "dispatch failed", result.ErrorCode);
+                    }
 
-            return new TaskDispatchResult(request, result.Status, request.DeviceTaskNumber ?? result.DeviceTaskNumber, result.ErrorCode, result.ErrorMessage);
+                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    outboxFailure = result.ErrorCode ?? result.Status.ToString();
+                }
+
+                dispatchResult = new TaskDispatchResult(request, result.Status, request.DeviceTaskNumber ?? result.DeviceTaskNumber, result.ErrorCode, result.ErrorMessage);
+            }
         }
+
+        if (commandClaim is not null)
+        {
+            if (markPublished)
+            {
+                await _commandOutbox!.MarkPublishedAsync(commandClaim, DateTimeOffset.UtcNow, CancellationToken.None);
+            }
+            else if (outboxFailure is not null)
+            {
+                await _commandOutbox!.MarkFailedAsync(commandClaim, outboxFailure, DateTimeOffset.UtcNow, nextAttemptAt, CancellationToken.None);
+            }
+        }
+
+        return dispatchResult;
     }
 
     internal Task<bool> ApplyObservationAsync(TaskDispatchRequest request, DeviceResultObservation observation)

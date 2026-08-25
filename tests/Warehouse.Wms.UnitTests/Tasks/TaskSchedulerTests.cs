@@ -160,6 +160,44 @@ public sealed class TaskSchedulerTests
         Assert.Equal(TaskState.PhysicalStateUnknown, request.Task.State);
     }
 
+    [Fact]
+    public async Task Scheduler_claims_device_command_before_gateway_and_publishes_after_acceptance()
+    {
+        var outbox = new RecordingTaskCommandOutbox();
+        var gateway = new FakeGateway(DeviceOperationStatus.Accepted, events: outbox.Events);
+        var scheduler = new WmsTaskScheduler(gateway, commandOutbox: outbox, workerId: "scheduler-test");
+        var request = Request("outbox-accepted", "PLC-01");
+
+        await scheduler.EnqueueAsync(request);
+        var result = await scheduler.DispatchNextAsync();
+
+        Assert.NotNull(result);
+        Assert.Equal(DeviceOperationStatus.Accepted, result!.Status);
+        Assert.Equal(["claim", "gateway", "published"], outbox.Events);
+        Assert.Equal(request.DeviceTask.IdempotencyKey, outbox.ClaimedKey);
+        Assert.Single(gateway.SubmittedTaskNumbers);
+    }
+
+    [Fact]
+    public async Task Scheduler_keeps_unknown_command_non_dispatchable_and_never_retries_it()
+    {
+        var outbox = new RecordingTaskCommandOutbox();
+        var gateway = new FakeGateway(DeviceOperationStatus.PhysicalStateUnknown, events: outbox.Events);
+        var scheduler = new WmsTaskScheduler(gateway, commandOutbox: outbox, workerId: "scheduler-test");
+        var request = Request("outbox-unknown", "PLC-01");
+
+        await scheduler.EnqueueAsync(request);
+        var result = await scheduler.DispatchNextAsync();
+
+        Assert.NotNull(result);
+        Assert.Equal(DeviceOperationStatus.PhysicalStateUnknown, result!.Status);
+        Assert.Equal(TaskState.PhysicalStateUnknown, request.Task.State);
+        Assert.Equal(["claim", "gateway", "failed"], outbox.Events);
+        Assert.Equal(DateTimeOffset.MaxValue, outbox.NextAttemptAt);
+        Assert.Null(await scheduler.DispatchNextAsync());
+        Assert.Single(gateway.SubmittedTaskNumbers);
+    }
+
     private static TaskDispatchRequest Request(string number, string deviceId, int priority = 0) =>
         new(
             new WarehouseTask(number, "Putaway"),
@@ -169,12 +207,14 @@ public sealed class TaskSchedulerTests
 
     private sealed class FakeGateway(
         DeviceOperationStatus submissionStatus,
-        string? responseIdempotencyKey = null) : IWarehouseDeviceGateway
+        string? responseIdempotencyKey = null,
+        List<string>? events = null) : IWarehouseDeviceGateway
     {
         public List<string> SubmittedTaskNumbers { get; } = [];
 
         public Task<DeviceOperationResult> SubmitInboundAsync(DeviceTask task, CancellationToken cancellationToken = default)
         {
+            events?.Add("gateway");
             SubmittedTaskNumbers.Add(task.WmsTaskId);
             return Task.FromResult(new DeviceOperationResult(responseIdempotencyKey ?? task.IdempotencyKey, submissionStatus,
                 submissionStatus == DeviceOperationStatus.Accepted ? $"device-{task.WmsTaskId}" : null));
@@ -192,5 +232,48 @@ public sealed class TaskSchedulerTests
 
         public Task<DeviceOperationResult> RequestStopAsync(DeviceTask task, CancellationToken cancellationToken = default) =>
             Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, DeviceOperationStatus.StopConfirmed));
+    }
+
+    private sealed class RecordingTaskCommandOutbox : ITaskCommandOutbox
+    {
+        private readonly TaskCommandOutboxClaim _claim = new(Guid.NewGuid(), "outbox-command", "scheduler-test");
+
+        public List<string> Events { get; } = [];
+        public string? ClaimedKey { get; private set; }
+        public DateTimeOffset NextAttemptAt { get; private set; }
+
+        public Task<TaskCommandOutboxClaim?> EnqueueAndClaimAsync(
+            DeviceTask task,
+            DeviceOperationKind operationKind,
+            string workerId,
+            DateTimeOffset claimedAt,
+            TimeSpan leaseDuration,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add("claim");
+            ClaimedKey = task.IdempotencyKey;
+            return Task.FromResult<TaskCommandOutboxClaim?>(_claim);
+        }
+
+        public Task MarkPublishedAsync(
+            TaskCommandOutboxClaim claim,
+            DateTimeOffset publishedAt,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add("published");
+            return Task.CompletedTask;
+        }
+
+        public Task MarkFailedAsync(
+            TaskCommandOutboxClaim claim,
+            string failure,
+            DateTimeOffset failedAt,
+            DateTimeOffset nextAttemptAt,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add("failed");
+            NextAttemptAt = nextAttemptAt;
+            return Task.CompletedTask;
+        }
     }
 }
