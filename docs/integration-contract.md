@@ -17,6 +17,6 @@ Task 8.1 定义 `/api/integrations/v1` 的可插拔边界。集成默认关闭�
 | POST | `/api/integrations/v1/result-callbacks` | 设备/外部结果回传 |
 | POST | `/api/integrations/v1/inventory-sync` | 库存同步 |
 
-接收端只验证契约、计算摘要并写入 Outbox，不直接调用 PLC、不直接修改库存，也不把外部回传视为设备完成。后续发布器必须根据幂等键、消息版本和结果版本去重；消息重试不能重复创建 WMS 业务单据或设备任务。
+接收端只验证契约、计算摘要并写入 Outbox，不直接调用 PLC、不直接修改库存，也不把外部回传视为设备完成。发布器必须根据幂等键、消息版本和结果版本去重；消息重试不能重复创建 WMS 业务单据或设备任务。Task 9.2A 已提供 SQL Server Outbox/Inbox 持久化仓储，但当前集成入口仍使用开发内存实现，尚未切换发布器。
 
-关闭 `Wms:ExternalIntegrationsEnabled` 时端点返回 `404 INTEGRATION_DISABLED`，不会写入 Outbox；本地手工流程仍可用。当前实现为开发内存 Outbox，生产环境需替换为已有 SQL Server Outbox 持久化实现后再启用。
+关闭 `Wms:ExternalIntegrationsEnabled` 时端点返回 `404 INTEGRATION_DISABLED`，不会写入 Outbox；本地手工流程仍可用。当前入口实现为开发内存 Outbox，生产环境需接入 Task 9.2A 的 SQL Server 持久化发布器后再启用。
