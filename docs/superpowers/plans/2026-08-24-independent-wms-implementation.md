@@ -858,7 +858,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **Task 8.2 执行证据（2026-08-25）：** `Program.cs` 新增模拟网关、任务调度器、入库/出库/移库/盘点/异常及相关应用服务注册；`ExceptionWorkItemService`、`StocktakingDifferenceService` 和人工确认服务按请求作用域注册。新增 `ApiCompositionTests` 使用 `WebApplicationFactory<Program>` 启动 API，检查 `/health/live`、解析所有控制器并断言 `IWarehouseDeviceGateway` 为 `SimulatedDeviceGateway`。先运行测试确认缺少网关注册的预期失败，再完成最小 DI 修复后通过。
 
-- 自动化状态：`AGENT_VERIFIED`（组合测试和完整质量门禁需在提交前重新执行）。
+- 自动化状态：`AGENT_VERIFIED`。2026-08-25 主代理复测：`dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false`、`dotnet test Warehouse.Wms.sln --no-build --no-restore` 和 `pwsh -NoProfile -File scripts/verify.ps1` 全部退出码为 0；95 个单元测试、35 个集成测试、37 个设备契约测试通过，Docker SQL Server 迁移已是最新，`/health/live` 与 `/health/ready` 返回 200，旧 `warehouse/` 保护检查通过。
 - 外部门禁：`HUMAN_PENDING`（生产部署配置和真实设备启用审批待负责人确认）；`FIELD_PENDING`（真实 PLC 未连接，未执行现场回归）。
 - 已知限制：当前部分业务服务仍使用开发内存实现，默认候选库位/装载点为空；本 Task 只保证运行时依赖可解析，不替代业务数据初始化和现场验证。
 - 旧系统：`warehouse/` 仅作只读参考，未修改。
