@@ -86,8 +86,8 @@ public sealed class SpreadsheetImportService
                         Guid.NewGuid(),
                         sourceKey,
                         digest,
-                        [new ImportError(1, "SourceKey", "SOURCE_KEY_CONFLICT",
-                            "来源键已关联另一份文件。", "更换来源键或提交原始文件。")]);
+                        new[] { new ImportError(1, "SourceKey", "SOURCE_KEY_CONFLICT",
+                            "来源键已关联另一份文件。", "更换来源键或提交原始文件。") });
                 }
 
                 return new SpreadsheetImportResult(
@@ -109,8 +109,8 @@ public sealed class SpreadsheetImportService
                 Guid.NewGuid(),
                 sourceKey,
                 digest,
-                [new ImportError(1, "Workbook", "INVALID_WORKBOOK", exception.Message,
-                    "使用项目提供的 xlsx 模板重新导出文件。")] );
+                new[] { new ImportError(1, "Workbook", "INVALID_WORKBOOK", exception.Message,
+                    "使用项目提供的 xlsx 模板重新导出文件。") });
         }
         if (parsed.Errors.Count > 0)
             return RejectedAndRemember(Guid.NewGuid(), sourceKey, digest, parsed.Errors);
@@ -139,8 +139,8 @@ public sealed class SpreadsheetImportService
                 importId,
                 sourceKey,
                 digest,
-                [new ImportError(1, "OrderNumber", "ORDER_CREATE_REJECTED", exception.Message,
-                    "检查订单号是否已存在，并确认明细数量和状态符合规则。")] );
+                new[] { new ImportError(1, "OrderNumber", "ORDER_CREATE_REJECTED", exception.Message,
+                    "检查订单号是否已存在，并确认明细数量和状态符合规则。") });
         }
     }
 
