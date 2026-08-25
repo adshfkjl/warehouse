@@ -1131,6 +1131,28 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** terra 完成 SQL 业务快照保存、幂等注册和幂等删除的最多 3 次 deadlock/唯一键竞争重试，重试由取消令牌控制且不吞掉版本/摘要冲突；新增同版本并发写入并断言最终版本/单条历史、幂等竞争重放/摘要冲突、确定性重试上限和中途取消测试；API composition SQL 测试改为仅使用 `WMS_SQLSERVER_TEST_CONNECTION`，未配置时稳定跳过。主代理复核提交 `8274f44`、`6f87f2c`：构建 0 警告/0 错误；Unit 139 通过；Integration 63 通过（SQL 环境全量运行）；设备契约 37 通过；Docker SQL 迁移、健康检查和 `scripts/verify.ps1` 质量门禁通过；`warehouse/` 无 tracked diff。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（生产并发策略和告警待确认）；`FIELD_PENDING`（真实 SQL 拓扑、PLC 与现场账实未验证）。
 
+### Task 9.8B：装载点基础资料目录与出库运行时读取
+
+**前置条件：** Task 3.1 基础资料迁移、Task 5.4 出库任务和 Task 9.8A 已达到 `AGENT_VERIFIED`；不得连接生产 PLC、生产数据库或 ERP。
+
+**目标：** 消除 API 对单个装载点 GUID 的硬编码。出库服务通过目录抽象读取 WMS 自有 `LoadingPoints` 基础资料；SQL 模式从 `WarehouseDbContext` 查询，开发/契约模式仅使用显式样例目录，不把现场映射或旧 PLC 地址写成已确认事实。
+
+**允许修改范围：** `src/Warehouse.Wms.Application/Outbound/` 的目录契约和出库服务、`src/Warehouse.Wms.Infrastructure/Persistence/` 的基础资料读取适配器、`src/Warehouse.Wms.Api/Program.cs` 的 DI 组合、出库 API/组合测试、`PROJECT_DESIGN.md`、本计划；不得修改 PLC/设备时序或旧 `warehouse/`。
+
+**必须完成：**
+
+- [ ] 定义 `ILoadingPointCatalog` 或等价只读边界，返回编码、禁用/锁定/占用/故障状态及稳定 ID；目录查询必须支持取消。
+- [ ] SQL 模式目录从 `LoadingPoints` 查询，不使用固定 GUID；开发/契约模式注册显式样例目录，且 SQL 连接缺失时不得隐式连接生产或伪造 SQL。
+- [ ] `OutboundTaskService` 提交任务时通过目录解析请求装载点，保留资源锁和可用性校验；删除 `Program.cs` 中的固定装载点实例。
+- [ ] 增加内存单元、SQL 读取和 API composition 测试，验证 seed 装载点可被请求、未知/禁用装载点被拒绝、取消令牌传播及无 SQL 环境稳定跳过。
+- [ ] 不修改 PLC、ERP 或旧 `warehouse/`；数据库模型无变化时不得生成无意义迁移。
+
+**验收：** `AGENT_VERIFIED`；构建、定向/完整测试、Docker SQL 读取和质量门禁通过。真实装载点编码、报警语义和现场可用性继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**外部门禁：** `HUMAN_PENDING`（装载点业务状态和统计口径待负责人确认）；`FIELD_PENDING`（真实点位映射、设备报警和 PLC 现场验证未执行）。
+
+**执行记录（2026-08-26）：** 待执行。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
