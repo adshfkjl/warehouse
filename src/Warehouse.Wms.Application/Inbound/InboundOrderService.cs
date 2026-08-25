@@ -471,9 +471,15 @@ public sealed class InboundOrderService
                 lock (_gate)
                 {
                     if (_orders.ContainsKey(state.OrderNumber)) continue;
-                    var order = new InboundOrder(state.OrderId, state.OrderNumber, state.CreatedAt, state.UpdatedAt);
+                    var createdAt = state.CreatedAt == default ? snapshot.UpdatedAt : state.CreatedAt;
+                    var updatedAt = state.UpdatedAt == default ? createdAt : state.UpdatedAt;
+                    var order = new InboundOrder(
+                        state.OrderId == Guid.Empty ? Guid.NewGuid() : state.OrderId,
+                        state.OrderNumber,
+                        createdAt,
+                        updatedAt);
                     foreach (var lineState in state.Lines.OrderBy(x => x.Index))
-                        order.AddLine(new InboundLine(lineState.MaterialId, lineState.OrderedQuantity, lineState.BatchNumber, lineState.ExpirationDate, lineState.Id));
+                        order.AddLine(new InboundLine(lineState.MaterialId, lineState.OrderedQuantity, lineState.BatchNumber, lineState.ExpirationDate, lineState.Id == Guid.Empty ? null : lineState.Id));
                     _orders.Add(state.OrderNumber, order);
                     var lines = order.Lines.ToArray();
                     foreach (var receipt in state.Receipts)
@@ -494,7 +500,7 @@ public sealed class InboundOrderService
                     else if (state.State == InboundState.Completed) { restored.TransitionTo(InboundState.PutawayQueued, "recovery", "从业务快照恢复"); restored.TransitionTo(InboundState.Completed, "recovery", "从业务快照恢复"); }
                     else if (state.State == InboundState.Canceled) restored.Cancel("recovery", "从业务快照恢复");
                     else if (state.State == InboundState.Exception) restored.MarkException("recovery", "从业务快照恢复");
-                    restored.RestoreUpdatedAt(state.UpdatedAt);
+                    restored.RestoreUpdatedAt(updatedAt);
                 }
                 lock (_gate) _workflowVersions[state.OrderNumber] = snapshot.Version;
             }
