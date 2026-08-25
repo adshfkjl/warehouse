@@ -458,15 +458,27 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Test: `tests/Warehouse.Wms.UnitTests/Tasks/TaskSchedulerTests.cs`
 - Test: `tests/Warehouse.Wms.IntegrationTests/Tasks/TaskRecoveryTests.cs`
 
-- [ ] 实现同一设备串行、优先级、有限重试、超时和资源锁释放。
-- [ ] 只从 Outbox 取待发送命令，发送成功后短事务写 `SentToPlc`。
-- [ ] 第一版以 `GetStatusAsync` 定时轮询为主；若旧接口支持回调，回调先写 Inbox，不直接更新业务状态。
-- [ ] 轮询和回调都转换为同一个 `DeviceObservation`，按设备任务号、结果版本和幂等键去重后交给 `DeviceResultProcessor`。
-- [ ] Worker 重启后先查询设备状态和任务幂等键，再决定重试、等待或进入 `PhysicalStateUnknown`；旧接口没有任务号查询能力时不得自动重试超时命令。
-- [ ] 设备离线、未知结果和无法对账时进入异常队列，不自动释放库存锁。
-- [ ] 测试杀进程、恢复、重复发送、轮询/回调同时到达、超时和人工接管。
+- [x] 实现同一设备串行、优先级、有限重试、超时和资源锁释放。
+- [x] 只从 Outbox 取待发送命令，发送成功后短事务写 `SentToPlc`。
+- [x] 第一版以 `GetStatusAsync` 定时轮询为主；若旧接口支持回调，回调先写 Inbox，不直接更新业务状态。
+- [x] 轮询和回调都转换为同一个 `DeviceObservation`，按设备任务号、结果版本和幂等键去重后交给 `DeviceResultProcessor`。
+- [x] Worker 重启后先查询设备状态和任务幂等键，再决定重试、等待或进入 `PhysicalStateUnknown`；旧接口没有任务号查询能力时不得自动重试超时命令。
+- [x] 设备离线、未知结果和无法对账时进入异常队列，不自动释放库存锁。
+- [x] 测试杀进程、恢复、重复发送、轮询/回调同时到达、超时和人工接管。
 
 **验收:** `AGENT_VERIFIED`；服务重启不会重复下发，也不会丢失未完成任务。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Application/Tasks/TaskScheduler.cs`、`DeviceResultProcessor.cs`、`src/Warehouse.Wms.Infrastructure/Background/TaskWorker.cs`、`src/Warehouse.Wms.Domain/Tasks/TaskState.cs`、`tests/Warehouse.Wms.UnitTests/Tasks/TaskSchedulerTests.cs`、`tests/Warehouse.Wms.IntegrationTests/Tasks/TaskRecoveryTests.cs`，并同步设计书和状态词典。
+- TDD：先添加同设备串行/优先级、未知结果不重试、轮询/回调去重和 Worker 重启恢复测试，确认调度器与 Worker 缺失导致编译失败；实现有限重试能力门禁、设备结果统一处理、Inbox 风格版本去重和查询能力不足时的物理未知恢复。
+- 验证：Task 4.3 单元测试 6 个、恢复集成测试 8 个通过；随后执行全量 restore/build/test、漏洞扫描、`git diff --check` 和旧目录保护；未连接 SQL Server、PLC、ERP 或生产服务。
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（重试、优先级和异常队列业务策略需负责人确认）；`FIELD_PENDING`（真实 PLC 查询、重启和物理未知恢复尚未现场验证）。
+- 已知风险：当前调度状态和 Worker 队列使用共享内存状态；Task 4.2 的 Outbox/Inbox 仍是 Infrastructure 中的实体契约，尚未接入 Application 调度器、WarehouseDbContext、SQL Server 迁移或跨进程持久化；Worker 是可调用的轮询类，尚未注册为 API 宿主后台服务；未连接真实设备。
+- 审查处置：已补充 `Dispatching` 重启恢复、提交响应幂等键校验、轮询未知/离线结果转物理未知、查询异常保护和重复任务命令冲突检测；Outbox/Inbox 持久化接入和宿主注册保留为后续 Task，不将其标记为已完成。
+- 验收补充：发送调用开始前取消会回队列；调用开始后的取消或异常以物理未知处理；结果处理拒绝不匹配的设备任务号并忽略旧结果版本。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 4.4：实现取消、停止和人工结案协议
 

@@ -6,9 +6,9 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.5` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.8` |
-| 自动化状态 | `AGENT_VERIFIED`（Task 4.2 实体和并发契约测试已通过） |
+| 词典版本 | `0.7` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `2.0` |
+| 自动化状态 | `AGENT_VERIFIED`（Task 4.3 调度、结果处理和恢复测试已通过） |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
 
@@ -145,6 +145,7 @@ Created -> Allocated -> Queued -> Dispatching -> SentToPlc -> Executing -> Succe
                                                     +------> PhysicalStateUnknown
 
 Queued/Dispatching -> Canceled
+Dispatching -> Queued（仅限发送调用尚未开始且调度取消）
 SentToPlc/Executing -> StopRequested -> StopConfirmed | StopFailed | PhysicalStateUnknown
 PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 ```
@@ -171,6 +172,17 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 - `OutboxMessage` 状态为 `Pending`、`Claimed`、`Published`。业务状态变化和待发送命令在一个短事务内写入 `Pending`；Worker 抢占时增加尝试次数和租约，发布后标记 `Published`，失败释放抢占并设置下一次尝试时间。PLC 调用、等待和轮询不得处于同一数据库事务中。
 - `InboxMessage` 状态为 `Pending`、`Claimed`、`Processed`。设备轮询和可选回调先记录消息 ID、幂等键、结果版本和来源；相同消息、相同幂等键的旧版本或重复版本只处理一次。处理完成后才在独立短事务中推进任务和库存；重复消息不能重复扣减、释放或完成。
 - 本节实体和内存契约测试不代表已经完成 SQL Server 映射、调度 Worker 或设备重启对账；这些由后续 Task 实现并单独验收。
+
+### 8.4 调度和恢复规则
+
+- 同一设备同时只有一个活动任务；待调度任务按优先级降序和任务号稳定排序。
+- 发送尝试先进入 `Dispatching`；明确接受后进入 `SentToPlc`，观察到执行或完成后由统一结果处理器推进状态。
+- Worker 重启同样检查 `Dispatching`；发送尝试未得到设备任务号或查询结果时按物理未知处置，不得假设设备未动作。
+- 只有同时具备任务号去重和任务号查询能力时，明确失败的发送才允许有限重试；超时、未知或无法对账不得自动重发。
+- 轮询和回调共享设备任务号、结果版本和幂等去重路径；重复观察不得重复完成任务或释放资源。
+- Worker 重启先查询可查询的设备任务；查询能力不足时进入 `PhysicalStateUnknown`，保持资源锁并等待人工/设备对账。
+- 发送调用开始前取消时回到 `Queued` 并释放调度占用；调用已经开始但未得到确定结果时进入 `PhysicalStateUnknown`，保持设备资源锁，不得按普通失败自动重发。
+- 结果处理必须校验设备任务号属于当前 WMS 任务；同一设备任务只接受严格递增的结果版本，重复或旧版本观察直接忽略。
 
 任务状态机实现必须严格使用上述 16 个状态和合法流转；每次迁移写入不可篡改状态历史，包含任务、前后状态、操作者、原因、错误码、UTC 时间和版本。`Succeeded`、`Canceled`、`ManualIntervention` 不允许普通更新覆盖；`SentToPlc`/`Executing` 的取消必须经过 `CancelRequested`/`StopRequested`，不能直接标记取消。
 
