@@ -19,6 +19,8 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<Pallet> Pallets => Set<Pallet>();
     public DbSet<InventoryBalanceEntity> InventoryBalances => Set<InventoryBalanceEntity>();
     public DbSet<InventoryTransactionEntity> InventoryTransactions => Set<InventoryTransactionEntity>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -170,6 +172,43 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.Property(x => x.WeightKg).HasPrecision(18, 3);
             entity.HasIndex(x => x.IdempotencyKey).IsUnique();
             entity.HasIndex(x => new { x.MaterialId, x.OccurredAt });
+        });
+
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.ToTable("OutboxMessages");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.MessageType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AggregateType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AggregateId).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Payload).HasColumnType("nvarchar(max)").IsRequired();
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.Property(x => x.ClaimedBy).HasMaxLength(128);
+            entity.Property(x => x.LastError).HasMaxLength(1000);
+            entity.HasIndex(x => x.IdempotencyKey).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.NextAttemptAt, x.ClaimExpiresAt });
+            entity.HasIndex(x => new { x.AggregateType, x.AggregateId });
+        });
+
+        modelBuilder.Entity<InboxMessage>(entity =>
+        {
+            entity.ToTable("InboxMessages");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.MessageId).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.MessageType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Payload).HasColumnType("nvarchar(max)").IsRequired();
+            entity.Property(x => x.Source).HasMaxLength(64);
+            entity.Property(x => x.ResultVersion).IsRequired();
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.Property(x => x.ClaimedBy).HasMaxLength(128);
+            entity.Property(x => x.LastError).HasMaxLength(1000);
+            entity.HasIndex(x => x.MessageId).IsUnique();
+            entity.HasIndex(x => new { x.IdempotencyKey, x.ResultVersion }).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.ReceivedAt, x.ClaimExpiresAt });
         });
 
         SeedDevelopmentData(modelBuilder);

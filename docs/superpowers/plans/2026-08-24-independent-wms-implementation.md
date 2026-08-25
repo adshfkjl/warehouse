@@ -892,6 +892,31 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **Task 9.1 执行证据（2026-08-25）：** 新增 `IInventoryLedgerStore`、SQL Server EF 余额/流水实体、唯一 `BalanceKey` 和幂等索引、串行化短事务及乐观版本检查；迁移 `20260825133933_InventoryLedgerPersistence` 可从空库建立表。API 默认 `InMemory`，显式 `Wms:PersistenceMode=SqlServer` 时强制要求 `ConnectionStrings:WmsDb` 并注入 SQL 存储。补充了持久化快照重启、幂等重放、摘要冲突、负库存保护和合法负调整测试；Docker SQL Server 实测定向集成测试 1/1 通过，SQL 模式 API 健康端点 200/200。完整构建通过；全量测试 99 个单元、36 个集成和 37 个设备契约通过，未配置 SQL 测试连接时仅 1 个 SQL fixture 按配置动态跳过。旧 `warehouse/` 未修改。
 
+### Task 9.2A：Outbox/Inbox SQL Server 持久化基础设施
+
+**前置条件:** Task 4.2、4.3、8.1 和 9.1 已达到 `AGENT_VERIFIED`；开发 SQL Server 容器可用；不得连接生产数据库；本 Task 不接入调度器或现场 Worker。
+
+**目标:** 将 Outbox/Inbox 消息实体从内存契约提升为可跨进程恢复的 SQL Server 消息账，保留消息去重、租约抢占、发布/处理和失败重试的短事务边界。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Infrastructure/Persistence/` 的消息映射、仓储、DbContext 和迁移
+- `tests/Warehouse.Wms.IntegrationTests/Tasks/` 的 SQL Server 持久化测试
+- `PROJECT_DESIGN.md`、本计划和必要的消息运维说明
+
+**必须完成:**
+- [x] 为 Outbox/Inbox 增加 EF Core 表映射、字段长度/时间类型、唯一业务索引和乐观并发版本字段。
+- [x] 定义最小 `IOutboxMessageStore`/`IInboxMessageStore` 边界，覆盖入队幂等、claim 租约恢复、publish/process、fail 回退和重复消息去重。
+- [x] 每个消息操作使用独立 SQL Server 短事务；设备调用、等待、轮询和回调不得处于事务中。
+- [x] 生成可从现有迁移链和空开发库执行的 `OutboxInboxPersistence` 迁移。
+- [x] 使用 `WMS_SQLSERVER_TEST_CONNECTION` 动态控制 SQL 集成测试；未配置时跳过，配置 Docker SQL Server 时覆盖重启/租约/版本冲突/重复消息行为。
+- [x] 不修改 `warehouse/`，不把消息仓储接入后续调度器流程。
+
+**验收:** `AGENT_VERIFIED`；消息重复入队不会产生第二条记录，旧租约可被新 Worker 抢占，错误 Worker 或过期 claim 不能发布/处理，失败可重试，旧 Inbox 结果不会覆盖较新结果；迁移、编译和定向 SQL 测试通过。
+
+**Task 9.2A 执行证据（2026-08-25）：** 新增 `MessagePersistence.cs`，提供 `SqlServerMessageStore`、`IOutboxMessageStore` 和 `IInboxMessageStore`；`WarehouseDbContext` 映射 `OutboxMessages`/`InboxMessages`，建立 Outbox 幂等键、Inbox 消息 ID及幂等键+结果版本唯一索引、状态查询索引和 `Version` 并发令牌；生成迁移 `20260825140514_OutboxInboxPersistence`。新增 `MessagePersistenceTests` 覆盖 Outbox 重复入队、过期 claim 恢复、错误 Worker 拒绝、失败回退、Inbox 重复/旧版本去重、新版本处理及状态操作。先按 TDD 观察测试因仓储缺失而失败，完成实现后构建通过；设置 Docker SQL Server 连接时定向测试 3/3 通过，未设置连接时 3 项动态跳过。未修改调度器、PLC、ERP 或旧 `warehouse/`，未进行现场确认。
+
+**已知风险:** 消息仓储已具备持久化和短事务契约，但当前 API/Worker 尚未将现有内存集成 Outbox 或调度器队列切换到该仓储；SQL Server 跨进程高并发、生产备份保留策略和真实设备消息语义仍需后续 Task 与人工/现场门禁确认。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
