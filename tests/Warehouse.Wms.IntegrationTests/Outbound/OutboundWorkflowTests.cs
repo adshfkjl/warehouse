@@ -101,6 +101,32 @@ public sealed class OutboundWorkflowTests
     }
 
     [Fact]
+    public async Task Catalog_loading_point_fault_or_unknown_is_rejected_before_device_submission()
+    {
+        var faulted = CreateFixture(DeviceOperationStatus.Accepted, catalog: new InMemoryLoadingPointCatalog([]));
+        var allocation = faulted.Allocate("outbound-catalog-missing");
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => faulted.Tasks.SubmitAsync(
+            allocation, new OutboundTaskRequest("outbound-catalog-missing", "PLC-01", faulted.LoadingPoint.Id)));
+
+        var point = new OutboundLoadingPoint(faulted.LoadingPoint, false, true);
+        var guarded = CreateFixture(DeviceOperationStatus.Accepted, catalog: new InMemoryLoadingPointCatalog([point]));
+        var guardedAllocation = guarded.Allocate("outbound-catalog-fault");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => guarded.Tasks.SubmitAsync(
+            guardedAllocation, new OutboundTaskRequest("outbound-catalog-fault", "PLC-01", point.LoadingPoint.Id)));
+    }
+
+    [Fact]
+    public async Task Catalog_cancellation_is_propagated_before_device_submission()
+    {
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, catalog: new CancelingLoadingPointCatalog());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var allocation = fixture.Allocate("outbound-catalog-cancel");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Tasks.SubmitAsync(
+            allocation, new OutboundTaskRequest("outbound-catalog-cancel", "PLC-01", fixture.LoadingPoint.Id), cancellation.Token));
+    }
+
+    [Fact]
     public async Task Persistent_loading_point_lock_is_released_after_review()
     {
         var store = new InMemoryTaskPersistenceStore();
@@ -177,7 +203,7 @@ public sealed class OutboundWorkflowTests
         Assert.Contains("outbound-snapshot-options", snapshot.SnapshotJson, StringComparison.Ordinal);
     }
 
-    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false, IResourceLockStore? resourceLockStore = null, IBusinessWorkflowStore? workflowStore = null)
+    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false, IResourceLockStore? resourceLockStore = null, IBusinessWorkflowStore? workflowStore = null, ILoadingPointCatalog? catalog = null)
     {
         var materialId = Guid.NewGuid();
         var palletId = Guid.NewGuid();
@@ -191,9 +217,17 @@ public sealed class OutboundWorkflowTests
         var loadingPoint = new LoadingPoint("LP-OUT-01", "出库口");
         var gateway = new ScenarioGateway(status);
         var scheduler = new WmsTaskScheduler(gateway);
-        var tasks = new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)], resourceLockStore, workflowStore);
+        var tasks = catalog is null
+            ? new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)], resourceLockStore, workflowStore)
+            : new OutboundTaskService(allocationService, scheduler, catalog, resourceLockStore, workflowStore);
         var review = new OutboundReviewService(tasks, inventory, workflowStore);
         return new Fixture(materialId, palletId, locationId, new Location(locationId, "A-OUT-01", 1, 100m, 1000m, 1000m, 1000m), loadingPoint, inventory, allocationService, order, tasks, review);
+    }
+
+    private sealed class CancelingLoadingPointCatalog : ILoadingPointCatalog
+    {
+        public Task<IReadOnlyList<OutboundLoadingPoint>> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromCanceled<IReadOnlyList<OutboundLoadingPoint>>(cancellationToken);
     }
 
     private sealed record Fixture(Guid MaterialId, Guid PalletId, Guid LocationId, Location Location, LoadingPoint LoadingPoint, InventoryService Inventory, OutboundAllocationService Allocations, OutboundOrder Order, OutboundTaskService Tasks, OutboundReviewService Review)

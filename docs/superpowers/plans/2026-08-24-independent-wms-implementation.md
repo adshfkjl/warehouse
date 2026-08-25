@@ -1144,14 +1144,14 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - [x] 定义 `ILoadingPointCatalog` 或等价只读边界，返回编码、禁用/锁定/占用/故障状态及稳定 ID；目录查询必须支持取消。
 - [x] SQL 模式目录从 `LoadingPoints` 查询，不使用固定 GUID；开发/契约模式注册显式样例目录，且 SQL 连接缺失时不得隐式连接生产或伪造 SQL。
 - [x] `OutboundTaskService` 提交任务时通过目录解析请求装载点，保留资源锁和可用性校验；删除 `Program.cs` 中的固定装载点实例。
-- [x] 增加内存单元、SQL 读取和 API composition 测试，验证 seed 装载点可被请求、未知/禁用装载点被拒绝、取消令牌传播及无 SQL 环境稳定跳过。
+- [ ] 增加内存单元、SQL 读取和 API composition 测试，验证 seed 装载点可被请求、未知/禁用装载点被拒绝、取消令牌传播及无 SQL 环境稳定跳过。
 - [x] 不修改 PLC、ERP 或旧 `warehouse/`；数据库模型无变化时不得生成无意义迁移。
 
 **验收：** `AGENT_VERIFIED`；构建、定向/完整测试、Docker SQL 读取和质量门禁通过。真实装载点编码、报警语义和现场可用性继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
 **外部门禁：** `HUMAN_PENDING`（装载点业务状态和统计口径待负责人确认）；`FIELD_PENDING`（真实点位映射、设备报警和 PLC 现场验证未执行）。
 
-**执行记录（2026-08-26）：** 新增 `ILoadingPointCatalog`、显式内存目录和 `SqlServerLoadingPointCatalog`；SQL 模式通过 `WarehouseDbContext.LoadingPoints` 读取 seed 装载点，API 不再硬编码装载点集合；出库提交保留可用性校验、资源锁和取消传播。新增内存目录单元、SQL seed 读取和 API composition 类型解析测试。主代理复核提交 `152cdb3`：构建 0 警告/0 错误；Unit 140、Integration 64、设备契约 37 通过；Docker SQL 迁移/装载点读取、健康检查和 `scripts/verify.ps1` 质量门禁通过；`warehouse/` 无 tracked diff；无模型变化因此未生成迁移。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（装载点业务状态和统计口径待确认）；`FIELD_PENDING`（真实点位映射、设备报警和 PLC 现场验证未执行）。
+**执行记录（2026-08-26，进行中）：** 已新增 `ILoadingPointCatalog`、显式内存目录和 `SqlServerLoadingPointCatalog`；SQL 模式通过 `WarehouseDbContext.LoadingPoints` 读取 seed 装载点，API 不再硬编码装载点集合；占用从 `Pallets.CurrentLoadingPointId` 派生，未知运行时故障按不可用处理，开发模式显式注入模拟状态。已增加内存目录、SQL seed 读取、目录状态、出库提交拒绝和取消传播测试。sol 首轮指出状态/新目录路径证据不足，已由提交 `9505dbf`、`98e414e` 修正；主代理定向测试通过，但完整复审和最终门禁尚未完成，因此保持 `IN_PROGRESS`，不得标记 `AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`、`FIELD_PENDING`。
 
 ## 十三、阶段门禁和最终标准
 
