@@ -6,9 +6,9 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.4` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.7` |
-| 自动化状态 | `AGENT_VERIFIED` 待代码和契约测试实现后复核 |
+| 词典版本 | `0.5` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `1.8` |
+| 自动化状态 | `AGENT_VERIFIED`（Task 4.2 实体和并发契约测试已通过） |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
 
@@ -163,6 +163,14 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 | `ManualIntervention` | 人工确认物理结果并结案的工作状态，不是成功别名 |
 
 设备命令只有在设备具备任务号去重和查询能力且能力已确认时才可自动重试；否则 `Dispatching`/发送超时后的安全结果是 `PhysicalStateUnknown`。
+
+### 8.3 幂等键、资源锁和消息协调状态
+
+- `TaskIdempotencyKey` 按 `scope + key` 建立唯一业务键，并保存请求摘要、关联任务、创建时间和可选过期时间。同一键且摘要相同的请求必须返回原处理结果；摘要不同必须返回可诊断冲突，不能覆盖原请求。
+- `ResourceLock` 适用于库位、托盘、装载点和设备。锁包含资源类型/编号、任务持有者、锁令牌、到期时间和乐观版本；过期或已释放锁不得续租，旧版本或非持有者不得续租/释放。
+- `OutboxMessage` 状态为 `Pending`、`Claimed`、`Published`。业务状态变化和待发送命令在一个短事务内写入 `Pending`；Worker 抢占时增加尝试次数和租约，发布后标记 `Published`，失败释放抢占并设置下一次尝试时间。PLC 调用、等待和轮询不得处于同一数据库事务中。
+- `InboxMessage` 状态为 `Pending`、`Claimed`、`Processed`。设备轮询和可选回调先记录消息 ID、幂等键、结果版本和来源；相同消息、相同幂等键的旧版本或重复版本只处理一次。处理完成后才在独立短事务中推进任务和库存；重复消息不能重复扣减、释放或完成。
+- 本节实体和内存契约测试不代表已经完成 SQL Server 映射、调度 Worker 或设备重启对账；这些由后续 Task 实现并单独验收。
 
 任务状态机实现必须严格使用上述 16 个状态和合法流转；每次迁移写入不可篡改状态历史，包含任务、前后状态、操作者、原因、错误码、UTC 时间和版本。`Succeeded`、`Canceled`、`ManualIntervention` 不允许普通更新覆盖；`SentToPlc`/`Executing` 的取消必须经过 `CancelRequested`/`StopRequested`，不能直接标记取消。
 

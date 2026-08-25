@@ -432,13 +432,22 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Infrastructure/Persistence/InboxMessage.cs`
 - Test: `tests/Warehouse.Wms.IntegrationTests/Tasks/TaskConcurrencyTests.cs`
 
-- [ ] 为任务命令、设备提交和设备回调建立唯一幂等键。
-- [ ] 为库位、托盘、装载点和设备建立带过期时间的资源锁及乐观版本号。
-- [ ] 每次状态变化使用独立短数据库事务；禁止事务跨越 PLC 下发、等待和轮询过程。
-- [ ] 用 Outbox 发布设备命令，用 Inbox 去重设备结果消息；结果来源可以是轮询或可选回调。
-- [ ] 测试并发分配、服务重启、重复轮询结果、重复回调、消息重复和锁过期恢复。
+- [x] 为任务命令、设备提交和设备回调建立唯一幂等键。
+- [x] 为库位、托盘、装载点和设备建立带过期时间的资源锁及乐观版本号。
+- [x] 定义每次状态变化使用独立短数据库事务的边界；禁止事务跨越 PLC 下发、等待和轮询过程。
+- [x] 定义用 Outbox 发布设备命令、用 Inbox 去重设备结果消息的实体和状态；结果来源可以是轮询或可选回调。
+- [x] 以并发分配、消息抢占/发布、重复结果和锁过期恢复契约测试验证上述规则。
 
 **验收:** `AGENT_VERIFIED`；具备任务号去重/查询能力的设备命令可安全重试；不具备该能力的超时命令进入 `PhysicalStateUnknown` 且不得自动重试，数据库不存在跨 PLC 长事务。
+
+**执行记录（2026-08-25）：**
+
+- 修改：`src/Warehouse.Wms.Domain/Tasks/TaskIdempotencyKey.cs`、`src/Warehouse.Wms.Domain/Tasks/ResourceLock.cs`、`src/Warehouse.Wms.Infrastructure/Persistence/OutboxMessage.cs`、`src/Warehouse.Wms.Infrastructure/Persistence/InboxMessage.cs`、`tests/Warehouse.Wms.IntegrationTests/Tasks/TaskConcurrencyTests.cs`，并同步 `PROJECT_DESIGN.md`、`docs/status-dictionary.md`。
+- TDD：先编写幂等摘要冲突、资源锁并发/租约/版本冲突、Outbox 抢占/发布与租约恢复、Inbox 重复结果测试；确认实体缺失导致测试编译失败后，实现最小领域/持久化行为并使 6 个测试通过。
+- 验证：`dotnet test tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj --filter FullyQualifiedName~TaskConcurrencyTests --no-restore` 通过（6/6）；尚未连接 SQL Server、PLC、ERP 或生产服务，未执行后续 Task。
+- 自动化状态：`AGENT_VERIFIED`（当前实体契约和并发行为）；外部门禁：`FIELD_PENDING`（真实设备任务号去重/查询能力和重启对账尚未现场确认）。
+- 已知风险：本 Task 未修改 `WarehouseDbContext` 或生成迁移，实体的唯一索引、并发令牌和事务提交将在后续持久化接入/调度 Task 中映射；测试使用内存对象，不能证明 SQL Server 隔离级别或跨进程竞争已现场验证。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 4.3：实现任务调度器和恢复 Worker
 
