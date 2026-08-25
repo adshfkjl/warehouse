@@ -1168,7 +1168,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收：** `AGENT_VERIFIED`；Docker SQL 并发测试、完整质量门禁和旧目录保护通过。真实 PLC 结果、现场设备串行能力和生产隔离级别保持 `FIELD_PENDING`。
 
-**执行记录（2026-08-26）：** 待执行。
+**执行记录（2026-08-26）：** 已完成 SQL 调度器跨进程并发验证与最小硬化：新增同设备并发租约唯一提交、不同设备并发提交、物理未知不重试及无 SQL 稳定跳过测试；`SqlServerTaskPersistenceStore` 对 deadlock、锁超时和唯一键竞争最多重试 3 次并支持取消，版本/业务冲突保持明确抛出；记录 `DeadlockRetryCount` 与 `LockContentionCount` 观测。未配置 `WMS_SQLSERVER_TEST_CONNECTION` 时 SQL 测试稳定跳过，未伪造连接。真实 PLC、生产 SQL 隔离级别和现场账实仍为 `FIELD_PENDING`。
 
 ## 十三、阶段门禁和最终标准
 

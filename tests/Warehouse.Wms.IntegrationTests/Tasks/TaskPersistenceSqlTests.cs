@@ -127,6 +127,126 @@ public sealed class TaskPersistenceSqlTests
         Assert.Contains(activeLocks, item => item.ResourceType == "Device" && item.ResourceId == "PLC-LEASE-01");
     }
 
+    [SqlServerFact]
+    public async Task Sql_schedulers_dispatch_same_device_concurrently_without_duplicate_submit_and_record_contention()
+    {
+        var configuredConnection = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var connectionBuilder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuredConnection)
+        {
+            InitialCatalog = $"WmsSchedulerConcurrent_{Guid.NewGuid():N}"
+        };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(connectionBuilder.ConnectionString).Options;
+        await using var setupFactory = new TestDbContextFactory(options);
+        await using (var setup = await setupFactory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+
+        await using var firstFactory = new TestDbContextFactory(options);
+        await using var secondFactory = new TestDbContextFactory(options);
+        var firstStore = new SqlServerTaskPersistenceStore(firstFactory);
+        var secondStore = new SqlServerTaskPersistenceStore(secondFactory);
+        var firstGateway = new SchedulerGateway();
+        var secondGateway = new SchedulerGateway();
+        var first = new WmsTaskScheduler(firstGateway, persistenceStore: firstStore, workerId: "concurrent-worker-1");
+        var second = new WmsTaskScheduler(secondGateway, persistenceStore: secondStore, workerId: "concurrent-worker-2");
+
+        await Task.WhenAll(
+            first.EnqueueAsync(new TaskDispatchRequest(
+                new WarehouseTask("TASK-SQL-CONCURRENT-001", "Putaway"),
+                new DeviceTask("sql-concurrent-idem-1", "TASK-SQL-CONCURRENT-001", "PLC-CONCURRENT-01", "1-1", "2-1", "LP-01", "v1"),
+                DeviceOperationKind.Inbound)),
+            second.EnqueueAsync(new TaskDispatchRequest(
+                new WarehouseTask("TASK-SQL-CONCURRENT-002", "Putaway"),
+                new DeviceTask("sql-concurrent-idem-2", "TASK-SQL-CONCURRENT-002", "PLC-CONCURRENT-01", "1-2", "2-2", "LP-02", "v1"),
+                DeviceOperationKind.Inbound)));
+
+        var results = await Task.WhenAll(first.DispatchNextAsync(), second.DispatchNextAsync());
+
+        Assert.Single(results.Where(result => result is not null));
+        Assert.Equal(1, firstGateway.SubmitCount + secondGateway.SubmitCount);
+        var activeLocks = await firstStore.GetActiveResourceLocksAsync();
+        Assert.Single(activeLocks.Where(item => item.ResourceType == "Device" && item.ResourceId == "PLC-CONCURRENT-01"));
+        Assert.True(firstStore.LockContentionCount + secondStore.LockContentionCount >= 1);
+    }
+
+    [SqlServerFact]
+    public async Task Sql_schedulers_dispatch_different_devices_concurrently_once_each_and_preserve_physical_unknown()
+    {
+        var configuredConnection = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var connectionBuilder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuredConnection)
+        {
+            InitialCatalog = $"WmsSchedulerDevices_{Guid.NewGuid():N}"
+        };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(connectionBuilder.ConnectionString).Options;
+        await using var setupFactory = new TestDbContextFactory(options);
+        await using (var setup = await setupFactory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+
+        await using var firstFactory = new TestDbContextFactory(options);
+        await using var secondFactory = new TestDbContextFactory(options);
+        var firstStore = new SqlServerTaskPersistenceStore(firstFactory);
+        var secondStore = new SqlServerTaskPersistenceStore(secondFactory);
+        var probe = new SubmitConcurrencyProbe();
+        var firstGateway = new SchedulerGateway(probe: probe);
+        var secondGateway = new SchedulerGateway(probe: probe);
+        var first = new WmsTaskScheduler(firstGateway, persistenceStore: firstStore, workerId: "devices-worker-1");
+        var second = new WmsTaskScheduler(secondGateway, persistenceStore: secondStore, workerId: "devices-worker-2");
+
+        var firstRequest = new TaskDispatchRequest(
+            new WarehouseTask("TASK-SQL-DEVICES-001", "Putaway"),
+            new DeviceTask("sql-devices-idem-1", "TASK-SQL-DEVICES-001", "PLC-DEVICES-01", "1-1", "2-1", "LP-01", "v1"),
+            DeviceOperationKind.Inbound);
+        var secondRequest = new TaskDispatchRequest(
+            new WarehouseTask("TASK-SQL-DEVICES-002", "Putaway"),
+            new DeviceTask("sql-devices-idem-2", "TASK-SQL-DEVICES-002", "PLC-DEVICES-02", "1-2", "2-2", "LP-02", "v1"),
+            DeviceOperationKind.Inbound);
+        await Task.WhenAll(first.EnqueueAsync(firstRequest), second.EnqueueAsync(secondRequest));
+
+        var results = await Task.WhenAll(first.DispatchNextAsync(), second.DispatchNextAsync());
+        Assert.All(results, result => Assert.NotNull(result));
+        Assert.Equal(1, firstGateway.SubmitCount);
+        Assert.Equal(1, secondGateway.SubmitCount);
+        Assert.True(probe.MaxConcurrentSubmits >= 2);
+
+        var unknownGateway = new SchedulerGateway(DeviceOperationStatus.PhysicalStateUnknown);
+        var unknownStore = new SqlServerTaskPersistenceStore(firstFactory);
+        var unknownScheduler = new WmsTaskScheduler(unknownGateway, persistenceStore: unknownStore);
+        var unknownRequest = new TaskDispatchRequest(
+            new WarehouseTask("TASK-SQL-UNKNOWN-001", "Putaway"),
+            new DeviceTask("sql-unknown-idem-1", "TASK-SQL-UNKNOWN-001", "PLC-UNKNOWN-01", "1-3", "2-3", "LP-03", "v1"),
+            DeviceOperationKind.Inbound);
+        await unknownScheduler.EnqueueAsync(unknownRequest);
+        var unknownResult = await unknownScheduler.DispatchNextAsync();
+        Assert.Equal(DeviceOperationStatus.PhysicalStateUnknown, unknownResult!.Status);
+        Assert.Null(await unknownScheduler.DispatchNextAsync());
+        var persistedUnknown = await unknownStore.GetTaskAsync(unknownRequest.Task.TaskNumber);
+        Assert.Equal(TaskState.PhysicalStateUnknown, persistedUnknown!.State);
+        Assert.Equal(1, unknownGateway.SubmitCount);
+    }
+
+    [Fact]
+    public async Task Sql_lock_retry_is_capped_and_cancellation_is_observed()
+    {
+        var attempts = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SqlServerTaskPersistenceStore.ExecuteWithTransientRetryAsync(
+                () => { attempts++; return Task.FromException(new InvalidOperationException("deadlock")); },
+                CancellationToken.None,
+                _ => true));
+        Assert.Equal(3, attempts);
+
+        using var cancellation = new CancellationTokenSource();
+        attempts = 0;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            SqlServerTaskPersistenceStore.ExecuteWithTransientRetryAsync(
+                () =>
+                {
+                    attempts++;
+                    if (attempts == 1) cancellation.Cancel();
+                    return Task.FromException(new InvalidOperationException("deadlock"));
+                },
+                cancellation.Token,
+                _ => true));
+        Assert.Equal(1, attempts);
+    }
+
     private sealed class SqlServerFactAttribute : FactAttribute
     {
         public SqlServerFactAttribute()
@@ -147,13 +267,45 @@ public sealed class TaskPersistenceSqlTests
 
     private sealed class SchedulerGateway : IWarehouseDeviceGateway
     {
-        public int SubmitCount { get; private set; }
-        public int QueryCount { get; private set; }
+        private readonly DeviceOperationStatus _submitStatus;
+        private readonly SubmitConcurrencyProbe? _probe;
+        private int _submitCount;
+        private int _queryCount;
+        private int _activeSubmits;
+        private int _maxConcurrentSubmits;
 
-        public Task<DeviceOperationResult> SubmitInboundAsync(DeviceTask task, CancellationToken cancellationToken = default)
+        public SchedulerGateway(DeviceOperationStatus submitStatus = DeviceOperationStatus.Accepted, SubmitConcurrencyProbe? probe = null)
         {
-            SubmitCount++;
-            return Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, DeviceOperationStatus.Accepted, "device-task-001"));
+            _submitStatus = submitStatus;
+            _probe = probe;
+        }
+
+        public int SubmitCount => Volatile.Read(ref _submitCount);
+        public int QueryCount => Volatile.Read(ref _queryCount);
+        public int MaxConcurrentSubmits => Volatile.Read(ref _maxConcurrentSubmits);
+
+        public async Task<DeviceOperationResult> SubmitInboundAsync(DeviceTask task, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _submitCount);
+            var active = Interlocked.Increment(ref _activeSubmits);
+            while (true)
+            {
+                var observed = Volatile.Read(ref _maxConcurrentSubmits);
+                if (active <= observed || Interlocked.CompareExchange(ref _maxConcurrentSubmits, active, observed) == observed) break;
+            }
+
+            _probe?.Enter();
+
+            try
+            {
+                await Task.Delay(25, cancellationToken);
+                return new DeviceOperationResult(task.IdempotencyKey, _submitStatus, "device-task-001");
+            }
+            finally
+            {
+                _probe?.Exit();
+                Interlocked.Decrement(ref _activeSubmits);
+            }
         }
 
         public Task<DeviceOperationResult> SubmitOutboundAsync(DeviceTask task, CancellationToken cancellationToken = default)
@@ -164,7 +316,7 @@ public sealed class TaskPersistenceSqlTests
 
         public Task<DeviceResultObservation?> GetStatusAsync(string deviceTaskNumber, CancellationToken cancellationToken = default)
         {
-            QueryCount++;
+            Interlocked.Increment(ref _queryCount);
             return Task.FromResult<DeviceResultObservation?>(
                 new DeviceResultObservation(deviceTaskNumber, 1, DeviceOperationStatus.Executing, DeviceObservationSource.Polling, DateTimeOffset.UtcNow));
         }
@@ -174,5 +326,22 @@ public sealed class TaskPersistenceSqlTests
 
         public Task<DeviceOperationResult> RequestStopAsync(DeviceTask task, CancellationToken cancellationToken = default)
             => Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, DeviceOperationStatus.StopConfirmed));
+    }
+
+    private sealed class SubmitConcurrencyProbe
+    {
+        private int _active;
+        private int _max;
+        public int MaxConcurrentSubmits => Volatile.Read(ref _max);
+        public void Enter()
+        {
+            var active = Interlocked.Increment(ref _active);
+            while (true)
+            {
+                var observed = Volatile.Read(ref _max);
+                if (active <= observed || Interlocked.CompareExchange(ref _max, active, observed) == observed) break;
+            }
+        }
+        public void Exit() => Interlocked.Decrement(ref _active);
     }
 }

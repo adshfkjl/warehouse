@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Warehouse.Wms.Application.Tasks;
 using Warehouse.Wms.Domain.Tasks;
@@ -8,6 +9,16 @@ namespace Warehouse.Wms.Infrastructure.Persistence;
 public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbContext> dbContextFactory)
     : ITaskPersistenceStore, IResourceLockStore
 {
+    private const int MaxTransientAttempts = 3;
+    private int _deadlockRetryCount;
+    private int _lockContentionCount;
+
+    /// <summary>Number of transient deadlock retries observed by this store.</summary>
+    public int DeadlockRetryCount => Volatile.Read(ref _deadlockRetryCount);
+
+    /// <summary>Number of lease/unique-key lock contention observations.</summary>
+    public int LockContentionCount => Volatile.Read(ref _lockContentionCount);
+
     public async Task<TaskCreateResult> CreateTaskAsync(WarehouseTask task, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
@@ -137,6 +148,17 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
 
     public async Task<ResourceLock> AcquireResourceLockAsync(string resourceType, string resourceId, string ownerTaskNumber, DateTimeOffset acquiredAt, TimeSpan leaseDuration, Guid? lockToken = null, CancellationToken cancellationToken = default)
     {
+        ResourceLock? result = null;
+        await ExecuteWithTransientRetryAsync(
+            async () => result = await AcquireResourceLockOnceAsync(resourceType, resourceId, ownerTaskNumber, acquiredAt, leaseDuration, lockToken, cancellationToken),
+            cancellationToken,
+            IsTransientLockFailure,
+            ObserveTransientRetry);
+        return result!;
+    }
+
+    private async Task<ResourceLock> AcquireResourceLockOnceAsync(string resourceType, string resourceId, string ownerTaskNumber, DateTimeOffset acquiredAt, TimeSpan leaseDuration, Guid? lockToken, CancellationToken cancellationToken)
+    {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var existing = await db.ResourceLocks.SingleOrDefaultAsync(x => x.ResourceType == resourceType.Trim() && x.ResourceId == resourceId.Trim() && x.ReleasedAt == null, cancellationToken);
@@ -144,6 +166,7 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
         {
             if (existing.IsActive(acquiredAt))
             {
+                Interlocked.Increment(ref _lockContentionCount);
                 throw new InvalidOperationException($"Resource '{existing.ResourceKey}' is already locked.");
             }
 
@@ -204,5 +227,52 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
         var timestamp = (at ?? DateTimeOffset.UtcNow).ToUniversalTime();
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await db.ResourceLocks.Where(x => x.ReleasedAt == null && x.ExpiresAt > timestamp).ToListAsync(cancellationToken);
+    }
+
+    internal static async Task ExecuteWithTransientRetryAsync(
+        Func<Task> operation,
+        CancellationToken cancellationToken,
+        Func<Exception, bool>? transient = null,
+        Action<Exception>? onRetry = null)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        transient ??= IsTransientLockFailure;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await operation();
+                return;
+            }
+            catch (Exception exception) when (attempt < MaxTransientAttempts && transient(exception))
+            {
+                onRetry?.Invoke(exception);
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
+            }
+        }
+    }
+
+    private void ObserveTransientRetry(Exception exception)
+    {
+        if (FindSqlError(exception, 1205) is not null)
+            Interlocked.Increment(ref _deadlockRetryCount);
+        else
+            Interlocked.Increment(ref _lockContentionCount);
+    }
+
+    private static bool IsTransientLockFailure(Exception exception)
+        => FindSqlError(exception, 1205, 1222, 2601, 2627) is not null;
+
+    private static SqlError? FindSqlError(Exception exception, params int[] numbers)
+    {
+        Exception? current = exception;
+        while (current is not null)
+        {
+            if (current is SqlException sql)
+                return sql.Errors.Cast<SqlError>().FirstOrDefault(error => numbers.Contains(error.Number));
+            current = current.InnerException;
+        }
+
+        return null;
     }
 }
