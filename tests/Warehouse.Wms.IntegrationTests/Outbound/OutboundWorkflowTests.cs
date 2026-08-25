@@ -118,12 +118,14 @@ public sealed class OutboundWorkflowTests
     [Fact]
     public async Task Catalog_cancellation_is_propagated_before_device_submission()
     {
-        var fixture = CreateFixture(DeviceOperationStatus.Accepted, catalog: new CancelingLoadingPointCatalog());
+        var catalog = new RecordingLoadingPointCatalog();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, catalog: catalog);
+        catalog.Point = new OutboundLoadingPoint(fixture.LoadingPoint, false);
         using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
         var allocation = fixture.Allocate("outbound-catalog-cancel");
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Tasks.SubmitAsync(
-            allocation, new OutboundTaskRequest("outbound-catalog-cancel", "PLC-01", fixture.LoadingPoint.Id), cancellation.Token));
+        await fixture.Tasks.SubmitAsync(allocation,
+            new OutboundTaskRequest("outbound-catalog-cancel", "PLC-01", fixture.LoadingPoint.Id), cancellation.Token);
+        Assert.Equal(cancellation.Token, catalog.ObservedToken);
     }
 
     [Fact]
@@ -224,10 +226,15 @@ public sealed class OutboundWorkflowTests
         return new Fixture(materialId, palletId, locationId, new Location(locationId, "A-OUT-01", 1, 100m, 1000m, 1000m, 1000m), loadingPoint, inventory, allocationService, order, tasks, review);
     }
 
-    private sealed class CancelingLoadingPointCatalog : ILoadingPointCatalog
+    private sealed class RecordingLoadingPointCatalog : ILoadingPointCatalog
     {
+        public CancellationToken ObservedToken { get; private set; }
         public Task<IReadOnlyList<OutboundLoadingPoint>> GetAsync(CancellationToken cancellationToken = default)
-            => Task.FromCanceled<IReadOnlyList<OutboundLoadingPoint>>(cancellationToken);
+        {
+            ObservedToken = cancellationToken;
+            return Task.FromResult<IReadOnlyList<OutboundLoadingPoint>>(Point is null ? [] : [Point]);
+        }
+        public OutboundLoadingPoint? Point { get; set; }
     }
 
     private sealed record Fixture(Guid MaterialId, Guid PalletId, Guid LocationId, Location Location, LoadingPoint LoadingPoint, InventoryService Inventory, OutboundAllocationService Allocations, OutboundOrder Order, OutboundTaskService Tasks, OutboundReviewService Review)

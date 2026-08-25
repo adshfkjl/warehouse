@@ -26,6 +26,29 @@ public sealed class LoadingPointCatalogSqlTests
         Assert.True(point.IsFaulted);
     }
 
+    [SqlServerFact]
+    public async Task Sql_catalog_marks_loading_point_occupied_when_pallet_points_to_it()
+    {
+        var configured = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configured)
+        {
+            InitialCatalog = $"WmsLoadingPointOccupied_{Guid.NewGuid():N}"
+        };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options;
+        var factory = new TestDbContextFactory(options);
+        await using (var setup = await factory.CreateDbContextAsync())
+        {
+            await setup.Database.MigrateAsync();
+            var pallet = new Warehouse.Wms.Domain.MasterData.Pallet("PLT-LP-01");
+            setup.Pallets.Add(pallet);
+            await setup.SaveChangesAsync();
+            await setup.Database.ExecuteSqlInterpolatedAsync($"UPDATE Pallets SET CurrentLoadingPointId = {Guid.Parse("00000000-0000-0000-0000-000000000006")} WHERE Id = {pallet.Id}");
+        }
+
+        var points = await new SqlServerLoadingPointCatalog(factory, new InMemoryLoadingPointRuntimeStatus()).GetAsync();
+        Assert.True(Assert.Single(points).IsOccupied);
+    }
+
     private sealed class SqlServerFactAttribute : FactAttribute
     {
         public SqlServerFactAttribute()
