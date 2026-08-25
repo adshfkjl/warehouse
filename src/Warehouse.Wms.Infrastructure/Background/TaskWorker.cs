@@ -1,10 +1,13 @@
 using Warehouse.Wms.Application.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 using Warehouse.Wms.Application.Inbound;
 using Warehouse.Wms.Application.Outbound;
 using Warehouse.Wms.Domain.Tasks;
+using Warehouse.Wms.Application.Relocation;
+using Warehouse.Wms.Application.Stocktaking;
 
 namespace Warehouse.Wms.Infrastructure.Background;
 
@@ -19,9 +22,12 @@ public sealed class TaskWorker
     private readonly PutawayTaskService? _putawayTasks;
     private readonly ITaskPersistenceStore? _taskPersistence;
     private readonly IBusinessWorkflowStore? _businessWorkflows;
+    private readonly RelocationService? _relocations;
+    private readonly StocktakingService? _stocktaking;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private bool _recoveryCompleted;
 
-    public TaskWorker(WmsTaskScheduler scheduler, TimeSpan? pollInterval = null, WorkflowRecoveryService? workflowRecovery = null, InboundOrderService? inboundOrders = null, OutboundReviewService? outboundReviews = null, OutboundTaskService? outboundTasks = null, PutawayTaskService? putawayTasks = null, ITaskPersistenceStore? taskPersistence = null, IBusinessWorkflowStore? businessWorkflows = null)
+    public TaskWorker(WmsTaskScheduler scheduler, TimeSpan? pollInterval = null, WorkflowRecoveryService? workflowRecovery = null, InboundOrderService? inboundOrders = null, OutboundReviewService? outboundReviews = null, OutboundTaskService? outboundTasks = null, PutawayTaskService? putawayTasks = null, ITaskPersistenceStore? taskPersistence = null, IBusinessWorkflowStore? businessWorkflows = null, RelocationService? relocations = null, StocktakingService? stocktaking = null, IServiceScopeFactory? scopeFactory = null)
     {
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _pollInterval = pollInterval ?? TimeSpan.FromSeconds(1);
@@ -32,6 +38,9 @@ public sealed class TaskWorker
         _putawayTasks = putawayTasks;
         _taskPersistence = taskPersistence;
         _businessWorkflows = businessWorkflows;
+        _relocations = relocations;
+        _stocktaking = stocktaking;
+        _scopeFactory = scopeFactory;
         if (_pollInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(pollInterval), _pollInterval, "Poll interval must be positive.");
@@ -52,6 +61,17 @@ public sealed class TaskWorker
                 await _putawayTasks.RestoreAsync(cancellationToken);
             if (_outboundReviews is not null)
                 await _outboundReviews.RestoreAsync(cancellationToken);
+            if (_relocations is not null)
+                await _relocations.RestoreAsync(cancellationToken);
+            if (_stocktaking is not null)
+                await _stocktaking.RestoreAsync(cancellationToken);
+            if (_scopeFactory is not null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var differences = scope.ServiceProvider.GetService<StocktakingDifferenceService>();
+                if (differences is not null)
+                    await differences.RestoreAsync(cancellationToken);
+            }
             if (_workflowRecovery is not null)
             {
                 foreach (var workflow in new[] { "Inbound", "Outbound", "Transfer", "Stocktaking", "Putaway", "Relocation" })
@@ -76,10 +96,12 @@ public sealed class TaskWorker
         {
             var kind = task.WorkflowKind?.Trim();
             if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(task.WorkflowReference)) continue;
-            var aggregateType = kind.Equals("Outbound", StringComparison.OrdinalIgnoreCase) ? "OutboundTask" :
+            var aggregateType = task.TaskType.Contains("Stocktaking", StringComparison.OrdinalIgnoreCase) ? "Stocktaking" :
+                kind.Equals("Outbound", StringComparison.OrdinalIgnoreCase) ? "OutboundTask" :
                 kind.Equals("Inbound", StringComparison.OrdinalIgnoreCase)
                     ? (task.TaskType.Equals("Putaway", StringComparison.OrdinalIgnoreCase) ? "PutawayTask" : "InboundOrder")
-                    : null;
+                    : kind.Equals("Relocation", StringComparison.OrdinalIgnoreCase) || kind.Equals("Transfer", StringComparison.OrdinalIgnoreCase) ? "Relocation" :
+                    kind.Equals("Stocktaking", StringComparison.OrdinalIgnoreCase) ? "Stocktaking" : null;
             if (aggregateType is null) continue;
             var snapshots = await _businessWorkflows.GetByTypeAsync(aggregateType, cancellationToken);
             var found = snapshots.Any(item =>

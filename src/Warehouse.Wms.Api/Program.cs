@@ -120,11 +120,12 @@ builder.Services.AddSingleton<OutboundReviewService>(sp => new OutboundReviewSer
     sp.GetRequiredService<InventoryService>(),
     sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddSingleton<RelocationService>(sp => new RelocationService(
-    sp.GetRequiredService<InventoryService>(), sp.GetRequiredService<WmsTaskScheduler>(), sp.GetService<IResourceLockStore>()));
+    sp.GetRequiredService<InventoryService>(), sp.GetRequiredService<WmsTaskScheduler>(), sp.GetService<IResourceLockStore>(), sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddSingleton<StocktakingService>(sp => new StocktakingService(
     sp.GetService<IEnumerable<StocktakingInventoryItem>>() ?? Array.Empty<StocktakingInventoryItem>(),
     sp.GetService<WmsTaskScheduler>(),
-    sp.GetService<IResourceLockStore>()));
+    sp.GetService<IResourceLockStore>(),
+    sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddScoped<StocktakingDifferenceService>();
 builder.Services.AddScoped<ExceptionWorkItemService>();
 builder.Services.AddScoped<PhysicalResultConfirmationService>();

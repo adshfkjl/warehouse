@@ -28,8 +28,11 @@ public sealed class StocktakingItem
         Guid materialId,
         Guid palletId,
         decimal bookQuantity,
-        decimal bookWeightKg)
+        decimal bookWeightKg,
+        Guid? id = null)
     {
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("A stocktaking item id is required.", nameof(id));
         LocationCode = Require(locationCode, nameof(locationCode));
         MaterialId = materialId;
         PalletId = palletId;
@@ -37,7 +40,7 @@ public sealed class StocktakingItem
         BookWeightKg = bookWeightKg;
     }
 
-    public Guid Id { get; } = Guid.NewGuid();
+    public Guid Id { get; }
     public string LocationCode { get; }
     public Guid MaterialId { get; }
     public Guid PalletId { get; }
@@ -67,6 +70,22 @@ public sealed class StocktakingItem
         State = StocktakingItemState.Counting;
     }
 
+    public void RestoreCount(decimal? quantity, decimal? weightKg, string? loadingPointCode, StocktakingItemState state)
+    {
+        if (quantity is not null || weightKg is not null)
+        {
+            if (quantity is null || weightKg is null) throw new ArgumentException("Count quantity and weight must be provided together.");
+            RecordCount(quantity.Value, weightKg.Value, loadingPointCode);
+        }
+        if (state == StocktakingItemState.Counting && State == StocktakingItemState.Pending) BeginCounting();
+        else if (state is StocktakingItemState.Pending or StocktakingItemState.Counting or StocktakingItemState.Counted or StocktakingItemState.Difference)
+        {
+            if (State != state && state is StocktakingItemState.Counted or StocktakingItemState.Difference)
+                throw new InvalidOperationException($"Count state '{state}' requires a count snapshot.");
+        }
+        else if (state == StocktakingItemState.Error) State = StocktakingItemState.Error;
+    }
+
     private static string Require(string value, string parameterName)
         => string.IsNullOrWhiteSpace(value)
             ? throw new ArgumentException("A non-empty value is required.", parameterName)
@@ -75,15 +94,17 @@ public sealed class StocktakingItem
 
 public sealed class StocktakingTask
 {
-    public StocktakingTask(string taskNumber, IEnumerable<StocktakingItem> items)
+    public StocktakingTask(string taskNumber, IEnumerable<StocktakingItem> items, Guid? id = null)
     {
         if (string.IsNullOrWhiteSpace(taskNumber)) throw new ArgumentException("A task number is required.", nameof(taskNumber));
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("A stocktaking task id is required.", nameof(id));
         TaskNumber = taskNumber.Trim();
         Items = items?.ToArray() ?? throw new ArgumentNullException(nameof(items));
         if (Items.Count == 0) throw new InvalidOperationException("A stocktaking task must contain at least one item.");
     }
 
-    public Guid Id { get; } = Guid.NewGuid();
+    public Guid Id { get; }
     public string TaskNumber { get; }
     public StocktakingState State { get; private set; } = StocktakingState.Draft;
     public IReadOnlyList<StocktakingItem> Items { get; }
@@ -100,5 +121,29 @@ public sealed class StocktakingTask
         };
         if (!allowed) throw new InvalidOperationException($"Stocktaking state transition '{State}' -> '{next}' is not allowed.");
         State = next;
+    }
+
+    public void RestoreState(StocktakingState target)
+    {
+        while (State != target)
+        {
+            var next = State switch
+            {
+                StocktakingState.Draft when target == StocktakingState.Canceled => StocktakingState.Canceled,
+                StocktakingState.Draft => StocktakingState.Pending,
+                StocktakingState.Pending when target == StocktakingState.Canceled => StocktakingState.Canceled,
+                StocktakingState.Pending when target == StocktakingState.Exception => StocktakingState.Exception,
+                StocktakingState.Pending => StocktakingState.Running,
+                StocktakingState.Running when target == StocktakingState.CompletedWithErrors => StocktakingState.CompletedWithErrors,
+                StocktakingState.Running when target == StocktakingState.Completed => StocktakingState.Completed,
+                StocktakingState.Running when target == StocktakingState.Failed => StocktakingState.Failed,
+                StocktakingState.Running when target == StocktakingState.Canceled => StocktakingState.Canceled,
+                StocktakingState.Running => StocktakingState.Exception,
+                StocktakingState.Exception when target == StocktakingState.Canceled => StocktakingState.Canceled,
+                StocktakingState.Exception => StocktakingState.Pending,
+                _ => throw new InvalidOperationException($"Stocktaking state '{State}' cannot be restored to '{target}'.")
+            };
+            TransitionTo(next);
+        }
     }
 }

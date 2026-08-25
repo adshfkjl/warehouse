@@ -2,6 +2,8 @@ using Warehouse.Wms.Application.Authorization;
 using Warehouse.Wms.Application.Inventory;
 using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.Stocktaking;
+using Warehouse.Wms.Application.Tasks;
+using System.Text.Json;
 
 namespace Warehouse.Wms.Application.Stocktaking;
 
@@ -29,6 +31,8 @@ public sealed class StocktakingDifferenceService
     private readonly ICurrentUser _currentUser;
     private readonly IRiskAuthorizationService _riskAuthorization;
     private readonly StocktakingFreezeStrategy _freezeStrategy;
+    private readonly IBusinessWorkflowStore? _workflowStore;
+    private readonly Dictionary<string, int> _workflowVersions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, StocktakingAdjustment> _adjustments = [];
     private readonly Dictionary<string, StocktakingAdjustment> _byTaskItem = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PutawayReservation> _reservations = new(StringComparer.OrdinalIgnoreCase);
@@ -39,13 +43,15 @@ public sealed class StocktakingDifferenceService
         InventoryService inventory,
         ICurrentUser currentUser,
         IRiskAuthorizationService riskAuthorization,
-        StocktakingFreezeStrategy freezeStrategy = StocktakingFreezeStrategy.FreezeOnDifference)
+        StocktakingFreezeStrategy freezeStrategy = StocktakingFreezeStrategy.FreezeOnDifference,
+        IBusinessWorkflowStore? workflowStore = null)
     {
         _stocktaking = stocktaking ?? throw new ArgumentNullException(nameof(stocktaking));
         _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
         _currentUser = currentUser ?? throw new ArgumentNullException(nameof(currentUser));
         _riskAuthorization = riskAuthorization ?? throw new ArgumentNullException(nameof(riskAuthorization));
         _freezeStrategy = freezeStrategy;
+        _workflowStore = workflowStore;
     }
 
     public IReadOnlyCollection<StocktakingAdjustment> Adjustments
@@ -92,6 +98,7 @@ public sealed class StocktakingDifferenceService
                 _freezeStrategy == StocktakingFreezeStrategy.FreezeOnDifference);
             _adjustments.Add(adjustment.Id, adjustment);
             _byTaskItem.Add(key, adjustment);
+            Persist(task.TaskNumber);
             return adjustment;
         }
     }
@@ -127,6 +134,7 @@ public sealed class StocktakingDifferenceService
     {
         var adjustment = GetAdjustment(adjustmentId);
         adjustment.RequestRecount(CurrentUserId(), Require(reason, nameof(reason)));
+        Persist(adjustment.TaskNumber);
         return adjustment;
     }
 
@@ -134,6 +142,7 @@ public sealed class StocktakingDifferenceService
     {
         var adjustment = GetAdjustment(adjustmentId);
         adjustment.RecordRecount(quantity, weightKg, CurrentUserId(), Require(reason, nameof(reason)));
+        Persist(adjustment.TaskNumber);
         return adjustment;
     }
 
@@ -191,8 +200,9 @@ public sealed class StocktakingDifferenceService
                 CurrentUserId(),
                 normalizedReason),
             cancellationToken);
-        adjustment.MarkApplied(transaction.Id, CurrentUserId(), normalizedReason);
-        return adjustment;
+            adjustment.MarkApplied(transaction.Id, CurrentUserId(), normalizedReason);
+            Persist(adjustment.TaskNumber);
+            return adjustment;
     }
 
     public PutawayReservation ReservePutaway(
@@ -211,6 +221,7 @@ public sealed class StocktakingDifferenceService
             if (_reservations.TryGetValue(key, out var existing)) return existing;
             var reservation = new PutawayReservation(task.TaskNumber, itemId, loadingPointCode, deviceId);
             _reservations.Add(key, reservation);
+            Persist(task.TaskNumber);
             return reservation;
         }
     }
@@ -219,6 +230,7 @@ public sealed class StocktakingDifferenceService
     {
         var reservation = FindReservation(reservationId);
         reservation.MarkSent(deviceTaskNumber);
+        Persist(reservation.TaskNumber);
         return reservation;
     }
 
@@ -226,8 +238,63 @@ public sealed class StocktakingDifferenceService
     {
         var reservation = FindReservation(reservationId);
         reservation.MarkCompleted();
+        Persist(reservation.TaskNumber);
         return reservation;
     }
+
+    public async Task RestoreAsync(CancellationToken cancellationToken = default)
+    {
+        if (_workflowStore is null) return;
+        var snapshots = await _workflowStore.GetByTypeAsync("StocktakingDifference", cancellationToken);
+        foreach (var snapshot in snapshots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DifferenceWorkflowState? state;
+            try { state = JsonSerializer.Deserialize<DifferenceWorkflowState>(snapshot.SnapshotJson); }
+            catch (JsonException) { continue; }
+            if (state is null) continue;
+            foreach (var item in state.Adjustments)
+            {
+                if (_adjustments.ContainsKey(item.Id)) continue;
+                var adjustment = new StocktakingAdjustment(item.TaskNumber, item.ItemId, item.MaterialId, item.PalletId, item.LocationCode, item.BookQuantity, item.BookWeightKg, item.InitialQuantity, item.InitialWeightKg, item.CountMode, item.DifferenceReason, item.IsFrozen, item.Id);
+                adjustment.RestoreState(item.State, item.FinalQuantity, item.FinalWeightKg, item.AppliedTransactionId);
+                _adjustments[item.Id] = adjustment;
+                _byTaskItem[Key(item.TaskNumber, item.ItemId)] = adjustment;
+            }
+            foreach (var item in state.Reservations)
+            {
+                if (_reservations.ContainsKey(Key(item.TaskNumber, item.ItemId))) continue;
+                var reservation = new PutawayReservation(item.TaskNumber, item.ItemId, item.LoadingPointCode, item.DeviceId, item.Id);
+                reservation.RestoreState(item.State, item.DeviceTaskNumber);
+                _reservations[Key(item.TaskNumber, item.ItemId)] = reservation;
+            }
+            _workflowVersions[snapshot.AggregateKey] = snapshot.Version;
+        }
+    }
+
+    private void Persist(string taskNumber)
+    {
+        if (_workflowStore is null) return;
+        var key = taskNumber.Trim();
+        var version = _workflowVersions.TryGetValue(key, out var current) ? current : 0;
+        StocktakingAdjustment[] adjustments;
+        PutawayReservation[] reservations;
+        lock (_gate)
+        {
+            adjustments = _adjustments.Values.Where(x => x.TaskNumber.Equals(key, StringComparison.OrdinalIgnoreCase)).ToArray();
+            reservations = _reservations.Values.Where(x => x.TaskNumber.Equals(key, StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
+        var state = new DifferenceWorkflowState(
+            adjustments.Select(x => new AdjustmentState(x.Id, x.TaskNumber, x.ItemId, x.MaterialId, x.PalletId, x.LocationCode, x.BookQuantity, x.BookWeightKg, x.InitialQuantity, x.InitialWeightKg, x.FinalQuantity, x.FinalWeightKg, x.CountMode, x.DifferenceReason, x.State, x.IsFrozen, x.AppliedTransactionId)).ToArray(),
+            reservations.Select(x => new ReservationState(x.Id, x.TaskNumber, x.ItemId, x.LoadingPointCode, x.DeviceId, x.DeviceTaskNumber, x.State)).ToArray());
+        var json = JsonSerializer.Serialize(state);
+        _workflowStore.SaveAsync(new BusinessWorkflowSnapshot("StocktakingDifference", key, version + 1, "Active", json, DateTimeOffset.UtcNow, key), version, "盘点差异状态保存", "system").GetAwaiter().GetResult();
+        _workflowVersions[key] = version + 1;
+    }
+
+    private sealed record DifferenceWorkflowState(IReadOnlyList<AdjustmentState> Adjustments, IReadOnlyList<ReservationState> Reservations);
+    private sealed record AdjustmentState(Guid Id, string TaskNumber, Guid ItemId, Guid MaterialId, Guid PalletId, string LocationCode, decimal BookQuantity, decimal BookWeightKg, decimal InitialQuantity, decimal InitialWeightKg, decimal FinalQuantity, decimal FinalWeightKg, StocktakingCountMode CountMode, string DifferenceReason, StocktakingAdjustmentState State, bool IsFrozen, Guid? AppliedTransactionId);
+    private sealed record ReservationState(Guid Id, string TaskNumber, Guid ItemId, string LoadingPointCode, string DeviceId, string? DeviceTaskNumber, PutawayReservationState State);
 
     private PutawayReservation FindReservation(Guid reservationId)
     {

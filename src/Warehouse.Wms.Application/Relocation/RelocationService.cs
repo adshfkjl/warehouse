@@ -6,6 +6,7 @@ using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.Relocation;
 using Warehouse.Wms.Domain.Tasks;
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
+using System.Text.Json;
 
 namespace Warehouse.Wms.Application.Relocation;
 
@@ -50,14 +51,18 @@ public sealed class RelocationService
     private readonly InventoryService _inventory;
     private readonly WmsTaskScheduler _scheduler;
     private readonly IResourceLockStore? _resourceLockStore;
+    private readonly IBusinessWorkflowStore? _workflowStore;
     private readonly Dictionary<string, RelocationResult> _results = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskDispatchRequest> _dispatches = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _workflowVersions = new(StringComparer.Ordinal);
+    private bool _restoring;
 
-    public RelocationService(InventoryService inventory, WmsTaskScheduler scheduler, IResourceLockStore? resourceLockStore = null)
+    public RelocationService(InventoryService inventory, WmsTaskScheduler scheduler, IResourceLockStore? resourceLockStore = null, IBusinessWorkflowStore? workflowStore = null)
     {
         _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _resourceLockStore = resourceLockStore;
+        _workflowStore = workflowStore;
     }
 
     public RelocationResult Get(string idempotencyKey)
@@ -175,15 +180,17 @@ public sealed class RelocationService
             var sent = await _scheduler.DispatchNextAsync(cancellationToken);
             if (sent is not null && ReferenceEquals(sent.Request.Task, task))
             {
+                if (sent.Status == DeviceOperationStatus.Succeeded)
+                    return await ProcessResultAsync(key, DeviceOperationStatus.Succeeded, cancellationToken);
                 var status = sent.Status switch
                 {
                     DeviceOperationStatus.Accepted or DeviceOperationStatus.Executing => RelocationStatus.Executing,
-                    DeviceOperationStatus.Succeeded => RelocationStatus.Completed,
                     DeviceOperationStatus.Failed or DeviceOperationStatus.Offline => RelocationStatus.Failed,
                     _ => RelocationStatus.PhysicalStateUnknown
                 };
                 lock (_gate) _results[key] = _results[key] with { Status = status };
             }
+            Persist(Get(key));
             return Get(key);
         }
         catch
@@ -208,7 +215,9 @@ public sealed class RelocationService
         if (status is DeviceOperationStatus.Failed or DeviceOperationStatus.Offline)
         {
             current.Order.TransitionTo(RelocationState.Failed);
-            return Store(current with { Status = RelocationStatus.Failed });
+            var failed = Store(current with { Status = RelocationStatus.Failed });
+            Persist(failed);
+            return failed;
         }
         if (status is DeviceOperationStatus.PhysicalStateUnknown or DeviceOperationStatus.Unknown or DeviceOperationStatus.TimedOut)
         {
@@ -218,7 +227,9 @@ public sealed class RelocationService
                 current.Task.TransitionTo(TaskState.PhysicalStateUnknown, "relocation", "物理结果未知");
             }
             current.Order.TransitionTo(RelocationState.PhysicalStateUnknown);
-            return Store(current with { Status = RelocationStatus.PhysicalStateUnknown });
+            var unknown = Store(current with { Status = RelocationStatus.PhysicalStateUnknown });
+            Persist(unknown);
+            return unknown;
         }
         if (status != DeviceOperationStatus.Succeeded)
             throw new ArgumentException($"Unsupported relocation result '{status}'.", nameof(status));
@@ -241,8 +252,97 @@ public sealed class RelocationService
             cancellationToken);
         current.Order.TransitionTo(RelocationState.Completed);
         await ReleaseAsync(current.ResourceLocks, current.Order.OrderNumber);
-        return Store(current with { Status = RelocationStatus.Completed, InventoryTransaction = transaction });
+        var completed = Store(current with { Status = RelocationStatus.Completed, InventoryTransaction = transaction });
+        Persist(completed);
+        return completed;
     }
+
+    public async Task RestoreAsync(CancellationToken cancellationToken = default)
+    {
+        if (_workflowStore is null) return;
+        var snapshots = await _workflowStore.GetByTypeAsync("Relocation", cancellationToken);
+        var activeLocks = _resourceLockStore is null
+            ? Array.Empty<ResourceLock>()
+            : (await _resourceLockStore.GetActiveResourceLocksAsync(cancellationToken: cancellationToken)).ToArray();
+        lock (_gate) _restoring = true;
+        try
+        {
+            foreach (var snapshot in snapshots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                RelocationWorkflowState? state;
+                try { state = JsonSerializer.Deserialize<RelocationWorkflowState>(snapshot.SnapshotJson); }
+                catch (JsonException) { continue; }
+                if (state is null || string.IsNullOrWhiteSpace(state.IdempotencyKey)) continue;
+                lock (_gate) if (_results.ContainsKey(state.IdempotencyKey)) continue;
+                try
+                {
+                    var order = new RelocationOrder(state.OrderNumber, state.MaterialId, state.PalletId, state.SourceLocationId, state.DestinationLocationId, state.Quantity, state.WeightKg, state.BatchNumber, state.OrderId);
+                    order.RestoreState(state.OrderState);
+                    var task = new WarehouseTask(state.TaskNumber, state.TaskType, state.TaskCreatedAt, state.TaskId);
+                    RestoreTaskState(task, state.TaskState);
+                    var device = new DeviceTask(state.IdempotencyKey, state.TaskNumber, state.DeviceId, state.SourceLocation, state.DestinationLocation, state.LoadingPoint, state.ProtocolVersion);
+                    var dispatch = new TaskDispatchRequest(task, device, DeviceOperationKind.Transfer, state.Priority, state.MaxAttempts)
+                    {
+                        AttemptCount = state.AttemptCount,
+                        DeviceTaskNumber = state.DeviceTaskNumber
+                    };
+                    var locks = activeLocks.Where(x => x.OwnerTaskNumber == state.TaskNumber || x.OwnerTaskNumber == state.OrderNumber).ToArray();
+                    var result = new RelocationResult(state.IdempotencyKey, state.Status, order, task, locks);
+                    lock (_gate)
+                    {
+                        _results[state.IdempotencyKey] = result;
+                        _dispatches[state.IdempotencyKey] = dispatch;
+                        _workflowVersions[state.IdempotencyKey] = snapshot.Version;
+                    }
+                }
+                catch (InvalidOperationException) { /* Worker will block malformed business state. */ }
+            }
+        }
+        finally { lock (_gate) _restoring = false; }
+    }
+
+    private void Persist(RelocationResult result)
+    {
+        if (_workflowStore is null || _restoring) return;
+        var key = result.IdempotencyKey;
+        var version = _workflowVersions.TryGetValue(key, out var current) ? current : 0;
+        var dispatch = _dispatches.TryGetValue(key, out var request) ? request : null;
+        if (dispatch is null) return;
+        var state = new RelocationWorkflowState(
+            result.Order.Id, result.Order.OrderNumber, result.Order.MaterialId, result.Order.PalletId,
+            result.Order.SourceLocationId, result.Order.DestinationLocationId, result.Order.Quantity,
+            result.Order.WeightKg, result.Order.BatchNumber, result.Order.State, result.Status,
+            result.Task.Id, result.Task.TaskNumber, result.Task.TaskType, result.Task.State, result.Task.CreatedAt,
+            dispatch.DeviceTask.IdempotencyKey, dispatch.DeviceTask.DeviceId, dispatch.DeviceTask.ProtocolVersion,
+            dispatch.DeviceTask.SourceLocation, dispatch.DeviceTask.DestinationLocation, dispatch.DeviceTask.LoadingPoint,
+            dispatch?.DeviceTaskNumber, dispatch?.Priority ?? 0, dispatch?.MaxAttempts ?? 1, dispatch?.AttemptCount ?? 0);
+        var json = JsonSerializer.Serialize(state);
+        _workflowStore.SaveAsync(new BusinessWorkflowSnapshot("Relocation", key, version + 1, result.Status.ToString(), json, DateTimeOffset.UtcNow, result.Task.TaskNumber), version, "移库业务状态保存", "system").GetAwaiter().GetResult();
+        _workflowVersions[key] = version + 1;
+        _workflowStore.RegisterIdempotencyAsync("relocation", key, $"relocation:{key}", "Relocation", key).GetAwaiter().GetResult();
+    }
+
+    private static void RestoreTaskState(WarehouseTask task, TaskState target)
+    {
+        var path = target switch
+        {
+            TaskState.Created => Array.Empty<TaskState>(),
+            TaskState.Allocated => new[] { TaskState.Allocated },
+            TaskState.Queued => new[] { TaskState.Allocated, TaskState.Queued },
+            TaskState.Dispatching => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching },
+            TaskState.SentToPlc => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc },
+            TaskState.Executing => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Executing },
+            TaskState.Succeeded => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Executing, TaskState.Succeeded },
+            TaskState.Failed => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Failed },
+            TaskState.TimedOut => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.TimedOut },
+            TaskState.PhysicalStateUnknown => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.TimedOut, TaskState.PhysicalStateUnknown },
+            _ => throw new InvalidOperationException($"Relocation task state '{target}' cannot be restored.")
+        };
+        foreach (var state in path) task.TransitionTo(state, "recovery", "从移库业务快照恢复");
+    }
+
+    private sealed record RelocationWorkflowState(Guid OrderId, string OrderNumber, Guid MaterialId, Guid PalletId, Guid SourceLocationId, Guid DestinationLocationId, decimal Quantity, decimal WeightKg, string? BatchNumber, RelocationState OrderState, RelocationStatus Status, Guid TaskId, string TaskNumber, string TaskType, TaskState TaskState, DateTimeOffset TaskCreatedAt, string IdempotencyKey, string DeviceId, string ProtocolVersion, string? SourceLocation, string? DestinationLocation, string? LoadingPoint, string? DeviceTaskNumber, int Priority, int MaxAttempts, int AttemptCount);
 
     private RelocationResult Store(RelocationResult result)
     {

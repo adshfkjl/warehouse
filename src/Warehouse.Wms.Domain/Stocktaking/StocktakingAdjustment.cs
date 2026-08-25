@@ -51,9 +51,12 @@ public sealed class StocktakingAdjustment
         decimal actualWeightKg,
         StocktakingCountMode countMode,
         string reason,
-        bool frozen)
+        bool frozen,
+        Guid? id = null)
     {
         TaskNumber = Require(taskNumber, nameof(taskNumber));
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("An adjustment id is required.", nameof(id));
         ItemId = itemId;
         MaterialId = materialId;
         PalletId = palletId;
@@ -74,7 +77,7 @@ public sealed class StocktakingAdjustment
         AddAudit("Created", "system", reason);
     }
 
-    public Guid Id { get; } = Guid.NewGuid();
+    public Guid Id { get; }
     public string AdjustmentNumber => $"ADJ-{Id:N}";
     public string TaskNumber { get; }
     public Guid ItemId { get; }
@@ -165,6 +168,31 @@ public sealed class StocktakingAdjustment
             State,
             DateTimeOffset.UtcNow));
 
+    public void RestoreState(StocktakingAdjustmentState target, decimal finalQuantity, decimal finalWeightKg, Guid? appliedTransactionId)
+    {
+        if (target == StocktakingAdjustmentState.RecountRequired)
+        {
+            RequestRecount("recovery", "从盘点差异快照恢复");
+            return;
+        }
+        if (target == StocktakingAdjustmentState.Approved || target == StocktakingAdjustmentState.Applied || target == StocktakingAdjustmentState.Rejected)
+        {
+            if (finalQuantity != InitialQuantity || finalWeightKg != InitialWeightKg)
+            {
+                RequestRecount("recovery", "从盘点差异快照恢复");
+                RecordRecount(finalQuantity, finalWeightKg, "recovery", "从盘点差异快照恢复");
+            }
+            if (target == StocktakingAdjustmentState.Rejected)
+            {
+                if (State == StocktakingAdjustmentState.PendingReview) Approve("recovery", "从盘点差异快照恢复");
+                return;
+            }
+            if (State == StocktakingAdjustmentState.PendingReview) Approve("recovery", "从盘点差异快照恢复");
+            if (target == StocktakingAdjustmentState.Applied && appliedTransactionId is Guid transactionId)
+                MarkApplied(transactionId, "recovery", "从盘点差异快照恢复");
+        }
+    }
+
     private void EnsureNotTerminal()
     {
         if (State is StocktakingAdjustmentState.Applied or StocktakingAdjustmentState.Rejected)
@@ -190,15 +218,17 @@ public sealed class StocktakingAdjustment
 
 public sealed class PutawayReservation
 {
-    public PutawayReservation(string taskNumber, Guid itemId, string loadingPointCode, string deviceId)
+    public PutawayReservation(string taskNumber, Guid itemId, string loadingPointCode, string deviceId, Guid? id = null)
     {
         TaskNumber = string.IsNullOrWhiteSpace(taskNumber) ? throw new ArgumentException("A task number is required.", nameof(taskNumber)) : taskNumber.Trim();
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("A reservation id is required.", nameof(id));
         ItemId = itemId;
         LoadingPointCode = string.IsNullOrWhiteSpace(loadingPointCode) ? throw new ArgumentException("A loading point is required.", nameof(loadingPointCode)) : loadingPointCode.Trim();
         DeviceId = string.IsNullOrWhiteSpace(deviceId) ? throw new ArgumentException("A device is required.", nameof(deviceId)) : deviceId.Trim();
     }
 
-    public Guid Id { get; } = Guid.NewGuid();
+    public Guid Id { get; }
     public string TaskNumber { get; }
     public Guid ItemId { get; }
     public string LoadingPointCode { get; }
@@ -221,5 +251,12 @@ public sealed class PutawayReservation
         if (State != PutawayReservationState.Sent)
             throw new InvalidOperationException($"Reservation '{Id}' cannot be completed from '{State}'.");
         State = PutawayReservationState.Completed;
+    }
+
+    public void RestoreState(PutawayReservationState state, string? deviceTaskNumber)
+    {
+        if (state is PutawayReservationState.Sent or PutawayReservationState.Completed)
+            MarkSent(deviceTaskNumber ?? $"recovery:{Id:N}");
+        if (state == PutawayReservationState.Completed) MarkCompleted();
     }
 }

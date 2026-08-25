@@ -15,7 +15,7 @@ public enum RelocationState
 
 public sealed class RelocationOrder
 {
-    public RelocationOrder(string orderNumber, Guid materialId, Guid palletId, Guid sourceLocationId, Guid destinationLocationId, decimal quantity, decimal weightKg, string? batchNumber = null)
+    public RelocationOrder(string orderNumber, Guid materialId, Guid palletId, Guid sourceLocationId, Guid destinationLocationId, decimal quantity, decimal weightKg, string? batchNumber = null, Guid? id = null)
     {
         if (string.IsNullOrWhiteSpace(orderNumber)) throw new ArgumentException("An order number is required.", nameof(orderNumber));
         if (materialId == Guid.Empty) throw new ArgumentException("A material is required.", nameof(materialId));
@@ -25,7 +25,8 @@ public sealed class RelocationOrder
         if (sourceLocationId == destinationLocationId) throw new InvalidOperationException("Source and destination locations must differ.");
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(quantity, 0m);
         ArgumentOutOfRangeException.ThrowIfNegative(weightKg);
-        Id = Guid.NewGuid();
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("A relocation order id is required.", nameof(id));
         OrderNumber = orderNumber.Trim();
         MaterialId = materialId;
         PalletId = palletId;
@@ -60,5 +61,29 @@ public sealed class RelocationOrder
         };
         if (!allowed) throw new InvalidOperationException($"Relocation state transition '{State}' -> '{next}' is not allowed.");
         State = next;
+    }
+
+    public void RestoreState(RelocationState target)
+    {
+        while (State != target)
+        {
+            var next = State switch
+            {
+                RelocationState.Draft => RelocationState.Allocated,
+                RelocationState.Allocated => RelocationState.Queued,
+                RelocationState.Queued when target is RelocationState.Executing => RelocationState.Executing,
+                RelocationState.Queued when target is RelocationState.Completed => RelocationState.Executing,
+                RelocationState.Queued when target is RelocationState.Failed => RelocationState.Failed,
+                RelocationState.Queued when target is RelocationState.PhysicalStateUnknown => RelocationState.PhysicalStateUnknown,
+                RelocationState.Queued => RelocationState.Exception,
+                RelocationState.Executing when target is RelocationState.Completed => RelocationState.Completed,
+                RelocationState.Executing when target is RelocationState.Failed => RelocationState.Failed,
+                RelocationState.Executing when target is RelocationState.PhysicalStateUnknown => RelocationState.PhysicalStateUnknown,
+                RelocationState.PhysicalStateUnknown when target is RelocationState.Completed => RelocationState.Completed,
+                RelocationState.PhysicalStateUnknown when target is RelocationState.Failed => RelocationState.Failed,
+                _ => throw new InvalidOperationException($"Relocation state '{State}' cannot be restored to '{target}'.")
+            };
+            TransitionTo(next);
+        }
     }
 }

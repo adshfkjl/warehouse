@@ -13,9 +13,10 @@ public sealed class WarehouseTask
 
     private WarehouseTask() { }
 
-    public WarehouseTask(string taskNumber, string taskType, DateTimeOffset? createdAt = null)
+    public WarehouseTask(string taskNumber, string taskType, DateTimeOffset? createdAt = null, Guid? id = null)
     {
-        Id = Guid.NewGuid();
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("A task id is required.", nameof(id));
         TaskNumber = Require(taskNumber, nameof(taskNumber));
         TaskType = Require(taskType, nameof(taskType));
         CreatedAt = Normalize(createdAt ?? DateTimeOffset.UtcNow);
