@@ -1153,6 +1153,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** 已新增 `ILoadingPointCatalog`、显式内存目录和 `SqlServerLoadingPointCatalog`；SQL 模式通过 `WarehouseDbContext.LoadingPoints` 读取 seed 装载点，API 不再硬编码装载点集合；占用从 `Pallets.CurrentLoadingPointId` 派生，未知运行时故障按不可用处理，开发模式显式注入模拟状态。已增加内存目录、SQL seed 读取、目录状态、出库提交缺失/故障拒绝、取消 token 观测和 SQL 托盘占用查询测试。sol 复审无 P0/P1，上一轮 P2 证据缺口已由提交 `1dcb625` 修正；主代理独立验证：Unit 142、Integration 67、设备契约 37 通过，构建 0 警告/错误，Docker SQL 迁移/占用读取、健康检查和 `scripts/verify.ps1` 质量门禁通过，`warehouse/` 无 tracked diff，无模型变化因此未生成迁移。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（装载点业务状态和统计口径待确认）；`FIELD_PENDING`（真实点位映射、设备报警和 PLC 现场验证未执行）。提交 `1dcb625` 推送因 GitHub 连接重置失败，状态 `PUSH_PENDING`，不影响本地继续执行。
 
+### Task 9.8C：SQL 调度器跨进程并发与死锁恢复
+
+**前置条件：** Task 9.6、9.7B 和 9.8A 已达到 `AGENT_VERIFIED`；不得连接生产 PLC、生产数据库或 ERP。
+
+**目标：** 在 Docker SQL Server 中验证两个或多个 Worker 同时 `DispatchNextAsync` 时的设备资源锁争抢、deadlock 重试、唯一结果和任务状态一致性；实现必须保持短事务，不得重复下发设备命令。
+
+**必须完成：**
+
+- [ ] 增加可重复的跨进程并发测试，覆盖相同设备不同任务、不同设备并发和任务结果回写。
+- [ ] 对设备租约抢占/调度操作增加有限可取消重试或稳定的锁顺序；业务版本冲突和物理未知不得被重试吞掉。
+- [ ] 证明同一设备同一时刻最多一个 Worker 持有有效锁，失败 Worker 不产生第二次 PLC 提交。
+- [ ] 记录 deadlock/锁争抢观测，测试未配置 SQL 时稳定跳过，不伪造连接。
+
+**验收：** `AGENT_VERIFIED`；Docker SQL 并发测试、完整质量门禁和旧目录保护通过。真实 PLC 结果、现场设备串行能力和生产隔离级别保持 `FIELD_PENDING`。
+
+**执行记录（2026-08-26）：** 待执行。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
