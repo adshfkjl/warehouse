@@ -83,6 +83,9 @@ public sealed class BusinessWorkflowSqlTests
 
         Assert.Equal(1, attempts.Count(result => result));
         Assert.Equal(1, attempts.Count(result => !result));
+        var final = await first.GetAsync("Relocation", "REL-CONCURRENT");
+        Assert.Equal(2, final!.Version);
+        Assert.Single(await first.GetHistoryAsync("Relocation", "REL-CONCURRENT"));
     }
 
     [SqlServerFact]
@@ -118,6 +121,32 @@ public sealed class BusinessWorkflowSqlTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             new SqlServerBusinessWorkflowStore(factory).SaveAsync(
                 new BusinessWorkflowSnapshot("Relocation", "REL-CANCEL", 1, "Queued", "{}", DateTimeOffset.UtcNow), 0, cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Transient_retry_is_capped_and_cancellation_during_backoff_is_observed()
+    {
+        var attempts = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SqlServerBusinessWorkflowStore.ExecuteWithTransientRetryAsync(
+                () => { attempts++; return Task.FromException(new InvalidOperationException("transient")); },
+                CancellationToken.None,
+                _ => true));
+        Assert.Equal(3, attempts);
+
+        using var cancellation = new CancellationTokenSource();
+        attempts = 0;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            SqlServerBusinessWorkflowStore.ExecuteWithTransientRetryAsync(
+                () =>
+                {
+                    attempts++;
+                    if (attempts == 1) cancellation.Cancel();
+                    return Task.FromException(new InvalidOperationException("transient"));
+                },
+                cancellation.Token,
+                _ => true));
+        Assert.Equal(1, attempts);
     }
 
     private static async Task<bool> TrySaveAsync(SqlServerBusinessWorkflowStore store, BusinessWorkflowSnapshot snapshot)
