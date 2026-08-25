@@ -1120,16 +1120,16 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **必须完成：**
 
-- [ ] 对 `SaveAsync`、`RegisterIdempotencyAsync` 及必要的读取/删除边界增加有限、可取消的 deadlock/唯一键竞争重试；不得吞掉业务版本冲突或摘要冲突。
-- [ ] 同一聚合同一版本并发写入最终只有一个成功，另一方明确返回 `BusinessWorkflowConcurrencyException` 或等价冲突；历史版本不得重复或静默覆盖。
-- [ ] 增加 SQL 集成测试覆盖同版本写入、同幂等键同摘要重放、同幂等键不同摘要拒绝、竞争重试上限和取消传播。
-- [ ] API composition SQL 测试只能使用 `WMS_SQLSERVER_TEST_CONNECTION` 或明确的无 SQL 夹具；未配置 SQL 时稳定跳过，不得回退到伪造连接。
+- [x] 对 `SaveAsync`、`RegisterIdempotencyAsync` 及必要的读取/删除边界增加有限、可取消的 deadlock/唯一键竞争重试；不得吞掉业务版本冲突或摘要冲突。
+- [x] 同一聚合同一版本并发写入最终只有一个成功，另一方明确返回 `BusinessWorkflowConcurrencyException` 或等价冲突；历史版本不得重复或静默覆盖。
+- [x] 增加 SQL 集成测试覆盖同版本写入、同幂等键同摘要重放、同幂等键不同摘要拒绝、竞争重试上限和取消传播。
+- [x] API composition SQL 测试只能使用 `WMS_SQLSERVER_TEST_CONNECTION` 或明确的无 SQL 夹具；未配置 SQL 时稳定跳过，不得回退到伪造连接。
 
 **验收：** `AGENT_VERIFIED`；构建、完整单元/集成测试和 SQL 夹具检查通过，真实 PLC/现场账实保持 `FIELD_PENDING`。
 
 **外部门禁：** `HUMAN_PENDING`（并发策略和运维告警尚未由负责人确认）；`FIELD_PENDING`（真实 SQL 生产拓扑、PLC 和现场恢复未验证）。
 
-**执行记录（2026-08-26）：** 待执行。
+**执行记录（2026-08-26）：** terra 完成 SQL 业务快照保存与幂等注册的最多 3 次 deadlock/唯一键竞争重试，重试由取消令牌控制且不吞掉版本/摘要冲突；新增同版本并发写入、幂等竞争重放/摘要冲突和取消传播测试；API composition SQL 测试改为仅使用 `WMS_SQLSERVER_TEST_CONNECTION`，未配置时稳定跳过。主代理复核提交 `8274f44`：构建 0 警告/0 错误；Unit 139 通过；Integration 46 通过、16 项无 SQL 时跳过；设备契约 37 通过；Docker SQL 配置下新增 SQL 并发/幂等/取消及 API composition 测试通过；`scripts/verify.ps1` 质量门禁通过；`warehouse/` 无 tracked diff。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（生产并发策略和告警待确认）；`FIELD_PENDING`（真实 SQL 拓扑、PLC 与现场账实未验证）。
 
 ## 十三、阶段门禁和最终标准
 
