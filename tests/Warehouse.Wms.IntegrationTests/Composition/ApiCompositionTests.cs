@@ -60,7 +60,7 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
         Assert.IsType<InMemoryIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
     }
 
-    [Fact]
+    [SqlServerFact]
     public void SqlServer_persistence_mode_uses_sql_message_store_and_integration_outbox()
     {
         var connection = TestSqlConnection();
@@ -75,7 +75,7 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
         Assert.IsType<SqlServerIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
     }
 
-    [Fact]
+    [SqlServerFact]
     public async Task SqlServer_mode_with_integrations_disabled_does_not_touch_the_outbox()
     {
         var connection = TestSqlConnection();
@@ -98,4 +98,13 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
     private static string TestSqlConnection()
         => Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")
             ?? "Server=127.0.0.1,14333;Database=WmsCompositionTest;User Id=sa;Password=WmsDevOnly!123;TrustServerCertificate=True;Encrypt=False";
+
+    private sealed class SqlServerFactAttribute : FactAttribute
+    {
+        public SqlServerFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")))
+                Skip = "Set WMS_SQLSERVER_TEST_CONNECTION to run SQL Server composition tests.";
+        }
+    }
 }
