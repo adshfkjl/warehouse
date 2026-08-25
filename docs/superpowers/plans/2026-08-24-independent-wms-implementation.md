@@ -1129,7 +1129,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **外部门禁：** `HUMAN_PENDING`（并发策略和运维告警尚未由负责人确认）；`FIELD_PENDING`（真实 SQL 生产拓扑、PLC 和现场恢复未验证）。
 
-**执行记录（2026-08-26）：** terra 完成 SQL 业务快照保存与幂等注册的最多 3 次 deadlock/唯一键竞争重试，重试由取消令牌控制且不吞掉版本/摘要冲突；新增同版本并发写入、幂等竞争重放/摘要冲突和取消传播测试；API composition SQL 测试改为仅使用 `WMS_SQLSERVER_TEST_CONNECTION`，未配置时稳定跳过。主代理复核提交 `8274f44`：构建 0 警告/0 错误；Unit 139 通过；Integration 46 通过、16 项无 SQL 时跳过；设备契约 37 通过；Docker SQL 配置下新增 SQL 并发/幂等/取消及 API composition 测试通过；`scripts/verify.ps1` 质量门禁通过；`warehouse/` 无 tracked diff。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（生产并发策略和告警待确认）；`FIELD_PENDING`（真实 SQL 拓扑、PLC 与现场账实未验证）。
+**执行记录（2026-08-26）：** terra 完成 SQL 业务快照保存、幂等注册和幂等删除的最多 3 次 deadlock/唯一键竞争重试，重试由取消令牌控制且不吞掉版本/摘要冲突；新增同版本并发写入并断言最终版本/单条历史、幂等竞争重放/摘要冲突、确定性重试上限和中途取消测试；API composition SQL 测试改为仅使用 `WMS_SQLSERVER_TEST_CONNECTION`，未配置时稳定跳过。主代理复核提交 `8274f44`、`6f87f2c`：构建 0 警告/0 错误；Unit 139 通过；Integration 63 通过（SQL 环境全量运行）；设备契约 37 通过；Docker SQL 迁移、健康检查和 `scripts/verify.ps1` 质量门禁通过；`warehouse/` 无 tracked diff。自动化状态：`AGENT_VERIFIED`。外部门禁：`HUMAN_PENDING`（生产并发策略和告警待确认）；`FIELD_PENDING`（真实 SQL 拓扑、PLC 与现场账实未验证）。
 
 ## 十三、阶段门禁和最终标准
 
