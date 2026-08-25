@@ -63,12 +63,11 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
     [Fact]
     public void SqlServer_persistence_mode_uses_sql_message_store_and_integration_outbox()
     {
+        var connection = TestSqlConnection();
         using var factory = _factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Wms:PersistenceMode", "SqlServer");
-            builder.UseSetting(
-                "ConnectionStrings:WmsDb",
-                "Server=127.0.0.1,1;Database=WmsCompositionTest;User Id=sa;Password=not-used;TrustServerCertificate=True");
+            builder.UseSetting("ConnectionStrings:WmsDb", connection);
         });
         using var scope = factory.Services.CreateScope();
 
@@ -79,12 +78,11 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
     [Fact]
     public async Task SqlServer_mode_with_integrations_disabled_does_not_touch_the_outbox()
     {
+        var connection = TestSqlConnection();
         using var factory = _factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Wms:PersistenceMode", "SqlServer");
-            builder.UseSetting(
-                "ConnectionStrings:WmsDb",
-                "Server=127.0.0.1,1;Database=WmsCompositionTest;User Id=sa;Password=not-used;TrustServerCertificate=True");
+            builder.UseSetting("ConnectionStrings:WmsDb", connection);
         });
         using var scope = factory.Services.CreateScope();
         var service = scope.ServiceProvider.GetRequiredService<IIntegrationCommandService>();
@@ -96,4 +94,8 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
 
         Assert.Equal("Disabled", result.Status);
     }
+
+    private static string TestSqlConnection()
+        => Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")
+            ?? "Server=127.0.0.1,14333;Database=WmsCompositionTest;User Id=sa;Password=WmsDevOnly!123;TrustServerCertificate=True;Encrypt=False";
 }
