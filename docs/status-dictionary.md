@@ -6,9 +6,9 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.9` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `2.2` |
-| 自动化状态 | `AGENT_VERIFIED`（Task 4.4 取消、停止和人工结案测试已通过） |
+| 词典版本 | `1.1` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `2.4` |
+| 自动化状态 | `AGENT_VERIFIED`（Task 4.5 异常工作项和处置测试已通过） |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
 
@@ -31,6 +31,16 @@ Task 4.4 的操作约束：
 - `PhysicalStateUnknown` 不接受普通取消，也不触发资源释放、库存提交或自动重试。
 - 停止响应必须匹配原设备任务幂等键；不匹配的停止结果进入 `PhysicalStateUnknown`，不得将其视为 `StopConfirmed` 或释放资源。
 - 人工操作的正式名称为“人工确认物理结果并结案”。请求必须包含原因、设备状态、托盘实际位置、源/目标库位和库存校正流水（流水号、物料、数量、单位、前后位置和原因），并通过当前用户和风险授权服务的二次授权。确认后状态为 `ManualIntervention`，同一任务不能重复确认。
+
+## 9. 异常工作项和处置状态
+
+异常工作项是设备任务、库存锁和业务单据之间的处置协调记录，不是把设备任务直接改成 `Succeeded` 的快捷入口。
+
+- 工作项必须记录 `source`、`type`、`severity`、`taskId`/任务号、设备任务号、当前物理状态、托盘、库位、装载点、库存余额、资源锁、设备观察和完整审计。
+- 活动工作项的幂等键为 `source + externalKey + taskId`。同一键的重复告警合并到原工作项；已关闭工作项收到同一告警时重开原工作项并追加 `Reopened` 审计。
+- 处置动作包括 `Retry`、`RequestStop`、`Reassign`、`ConfirmPhysicalResult`、`InventoryCorrection` 和 `Close`。动作必须经过应用服务，复用任务状态机、资源锁和权限抽象，记录操作人、原因和处理前后状态。
+- `PhysicalStateUnknown` 只允许先进行设备对账、停止请求或经过二次授权的物理结果确认；不得自动重试、重新分配、释放资源或将工作项标记解决。未知状态下的关闭也必须提供非未知的物理结果，`Closed + Unknown` 必须拒绝。
+- 当前实现的异常仓储和动作执行器是内存契约，用于自动化测试；尚未完成 SQL Server 持久化、跨进程幂等、Outbox/Inbox 接入、真实用户/JWT 和现场设备对账。相关门禁保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
 ## 3. 入库单状态
 
@@ -194,7 +204,7 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 
 任务状态机实现必须严格使用上述 16 个状态和合法流转；每次迁移写入不可篡改状态历史，包含任务、前后状态、操作者、原因、错误码、UTC 时间和版本。`Succeeded`、`Canceled`、`ManualIntervention` 不允许普通更新覆盖；`SentToPlc`/`Executing` 的取消必须经过 `CancelRequested`/`StopRequested`，不能直接标记取消。
 
-## 9. 第一版范围
+## 10. 第一版范围
 
 ### 9.1 包含
 
@@ -213,7 +223,7 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 - 在没有现场确认的情况下重定义 PLC 寄存器、设备时序、完成码、重量阈值或急停流程。
 - 跨仓网络调度、自动路径优化、机器人群控和高级预测分析；这些另立需求和计划。
 
-## 10. 入口优先级和数据所有权
+## 11. 入口优先级和数据所有权
 
 1. **手工/PDA（优先级 1）**：用于现场即时作业，调用与其他入口相同的 WMS 应用服务；PDA 不直接控制寄存器。
 2. **Excel 导入（优先级 2）**：用于批量建单，必须先完成模板版本、整批校验、错误报告和文件摘要幂等；成功导入只创建 WMS 单据，不直接下发 PLC。
@@ -221,7 +231,7 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 
 优先级只决定同一资源发生竞争时的入队顺序，不允许绕过库存锁、权限或任务状态机。WMS 自有业务单据、库存、托盘、库位和任务是唯一业务真相；外部来源不能直接覆盖本地状态。相同业务单号或幂等键冲突必须返回可诊断错误，不能重复创建或重复下发设备任务。
 
-## 11. 门禁
+## 12. 门禁
 
 - `AGENT_VERIFIED`：词典、范围和合法流转已文档化并通过静态审查。
 - `HUMAN_PENDING`：负责人尚未确认第一版业务范围、状态含义和入口优先级。
