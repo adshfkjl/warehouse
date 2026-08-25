@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Controllers;
@@ -7,6 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.DeviceGateway;
 using Warehouse.Wms.Application.Inventory;
+using Warehouse.Wms.Application.Integrations;
+using Warehouse.Wms.Infrastructure.Integrations;
+using Warehouse.Wms.Infrastructure.Persistence;
 
 namespace Warehouse.Wms.IntegrationTests.Composition;
 
@@ -52,5 +56,44 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
         using var scope = _factory.Services.CreateScope();
         Assert.Null(scope.ServiceProvider.GetService<IInventoryLedgerStore>());
         Assert.IsType<InventoryService>(scope.ServiceProvider.GetRequiredService<InventoryService>());
+        Assert.Null(scope.ServiceProvider.GetService<IOutboxMessageStore>());
+        Assert.IsType<InMemoryIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
+    }
+
+    [Fact]
+    public void SqlServer_persistence_mode_uses_sql_message_store_and_integration_outbox()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Wms:PersistenceMode", "SqlServer");
+            builder.UseSetting(
+                "ConnectionStrings:WmsDb",
+                "Server=127.0.0.1,1;Database=WmsCompositionTest;User Id=sa;Password=not-used;TrustServerCertificate=True");
+        });
+        using var scope = factory.Services.CreateScope();
+
+        Assert.IsType<SqlServerMessageStore>(scope.ServiceProvider.GetRequiredService<IOutboxMessageStore>());
+        Assert.IsType<SqlServerIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
+    }
+
+    [Fact]
+    public async Task SqlServer_mode_with_integrations_disabled_does_not_touch_the_outbox()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Wms:PersistenceMode", "SqlServer");
+            builder.UseSetting(
+                "ConnectionStrings:WmsDb",
+                "Server=127.0.0.1,1;Database=WmsCompositionTest;User Id=sa;Password=not-used;TrustServerCertificate=True");
+        });
+        using var scope = factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IIntegrationCommandService>();
+        using var payload = JsonDocument.Parse("{\"sku\":\"MAT-01\"}");
+
+        var result = await service.EnqueueAsync(
+            IntegrationMessageType.InboundNotice,
+            new ExternalIntegrationRequest("ERP", "v1", "disabled-001", null, payload.RootElement.Clone()));
+
+        Assert.Equal("Disabled", result.Status);
     }
 }

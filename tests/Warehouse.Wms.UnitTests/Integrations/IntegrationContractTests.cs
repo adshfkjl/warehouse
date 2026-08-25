@@ -38,6 +38,23 @@ public sealed class IntegrationContractTests
     }
 
     [Fact]
+    public async Task Enabled_integration_rejects_idempotency_key_reuse_with_a_different_digest()
+    {
+        var outbox = new InMemoryIntegrationOutbox();
+        var service = new IntegrationCommandService(outbox, enabled: true);
+        using var firstPayload = JsonDocument.Parse("{\"sku\":\"MAT-01\"}");
+        using var conflictingPayload = JsonDocument.Parse("{\"sku\":\"MAT-02\"}");
+
+        await service.EnqueueAsync(
+            IntegrationMessageType.InboundNotice,
+            new ExternalIntegrationRequest("ERP", "v1", "in-conflict", null, firstPayload.RootElement.Clone()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.EnqueueAsync(
+            IntegrationMessageType.InboundNotice,
+            new ExternalIntegrationRequest("ERP", "v1", "in-conflict", null, conflictingPayload.RootElement.Clone())));
+    }
+
+    [Fact]
     public async Task Unsupported_contract_version_is_rejected_before_outbox()
     {
         var service = new IntegrationCommandService(new InMemoryIntegrationOutbox(), enabled: true);

@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 3.12 |
+| 文档版本 | 3.13 |
 | 当前状态 | 需求与总体架构设计 |
 | 更新日期 | 2026-08-25 |
 | 系统定位 | 可脱离 ERP 独立运行的完整仓储管理系统（WMS） |
@@ -435,7 +435,7 @@ Task 7.2 增加 [`docs/pilot-runbook.md`](docs/pilot-runbook.md)、[`docs/rollba
 - 外部接口不可用时，本地仓储作业不受影响。
 - 外部回传失败必须进入待同步队列，不得重复执行 PLC 作业。
 
-Task 8.1 固化 `/api/integrations/v1` 契约：入库通知、出库请求、取消请求、状态查询、结果回传和库存同步均必须携带来源、版本、幂等键和原始报文摘要。接收端只做契约校验并写入 Outbox，不直接调用 PLC 或修改库存；同一幂等键只能排队一次。`Wms:ExternalIntegrationsEnabled` 默认关闭，关闭时返回 `INTEGRATION_DISABLED` 且手工建单和本地仓储作业继续可用。当前开发实现使用内存 Outbox，启用生产集成前必须替换为 SQL Server 持久化发布器。
+Task 8.1 固化 `/api/integrations/v1` 契约：入库通知、出库请求、取消请求、状态查询、结果回传和库存同步均必须携带来源、版本、幂等键和原始报文摘要。接收端只做契约校验并写入 Outbox，不直接调用 PLC 或修改库存；同一幂等键只能排队一次。`Wms:ExternalIntegrationsEnabled` 默认关闭，关闭时返回 `INTEGRATION_DISABLED` 且手工建单和本地仓储作业继续可用。Task 9.3 已将 SQL Server `IIntegrationOutbox` 接入 `Wms:PersistenceMode=SqlServer` 组合，并保留 `InMemory` 模式用于无数据库开发和契约测试；发布 Worker、外部系统真实联调和现场门禁仍待后续任务。
 
 ### 6.16 旧系统仓储规则基线
 
@@ -577,3 +577,4 @@ Task 8.1 固化 `/api/integrations/v1` 契约：入库通知、出库请求、�
 | 2026-08-25 | 3.10 | 执行 Task 8.2：补齐 API 运行时组合根，默认注册模拟设备网关、统一任务调度器及所有控制器应用服务；新增真实启动和逐控制器依赖解析集成测试，确保无 ERP/真实 PLC 时 API 可启动 | API 启动、依赖注入、模拟设备、任务调度、异常作用域和集成测试 |
 | 2026-08-25 | 3.11 | 新增 Task 9.1：将库存余额、不可篡改库存流水和操作幂等键接入 SQL Server 短事务持久化；保留仅用于无数据库开发/契约测试的内存模式，增加重启恢复、唯一幂等和乐观并发验收 | 库存、数据库迁移、事务边界、幂等、恢复、API 配置和测试 |
 | 2026-08-25 | 3.12 | 执行 Task 9.2A：将 Outbox/Inbox 消息实体接入 SQL Server，增加唯一业务索引、乐观版本、租约抢占、发布/处理/失败短事务和重复结果去重；暂不接入调度器或现场 Worker | Outbox/Inbox、任务调度、数据库迁移、消息恢复、幂等和测试 |
+| 2026-08-25 | 3.13 | 执行 Task 9.3：将外部集成 Outbox 从内存实现切换为复用 SQL Server 消息仓储的持久化适配器；SQL 模式注册消息 store 和 SQL outbox，内存模式及集成关闭行为保持不变；发布 Worker、真实外部联调和 HUMAN/FIELD 门禁后置 | 外部集成、Outbox、数据库组合、幂等、API 配置和测试 |

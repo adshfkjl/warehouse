@@ -61,6 +61,8 @@ if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
 else
 {
     builder.Services.AddSingleton<InventoryService>();
+    builder.Services.AddSingleton<InMemoryIntegrationOutbox>();
+    builder.Services.AddSingleton<IIntegrationOutbox>(sp => sp.GetRequiredService<InMemoryIntegrationOutbox>());
 }
 builder.Services.AddSingleton<InboundOrderService>();
 builder.Services.AddSingleton<PutawayAllocationService>();
@@ -79,8 +81,6 @@ builder.Services.AddSingleton<SpreadsheetImportService>();
 builder.Services.AddSingleton<IReportsReadModel, InMemoryReportsReadModel>();
 builder.Services.AddSingleton<MessagingHealthState>();
 builder.Services.AddSingleton<WarehouseHealthCheckService>();
-builder.Services.AddSingleton<InMemoryIntegrationOutbox>();
-builder.Services.AddSingleton<IIntegrationOutbox>(sp => sp.GetRequiredService<InMemoryIntegrationOutbox>());
 builder.Services.AddSingleton<IIntegrationCommandService>(sp =>
     new IntegrationCommandService(
         sp.GetRequiredService<IIntegrationOutbox>(),

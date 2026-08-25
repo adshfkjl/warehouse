@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Application.Inventory;
+using Warehouse.Wms.Infrastructure.Integrations;
 
 namespace Warehouse.Wms.Infrastructure.Persistence;
 
@@ -17,6 +19,10 @@ public static class InventoryPersistenceServiceCollectionExtensions
 
         services.AddPooledDbContextFactory<WarehouseDbContext>(options => options.UseSqlServer(connectionString));
         services.AddSingleton<IInventoryLedgerStore, SqlServerInventoryLedgerStore>();
+        services.AddSingleton<SqlServerMessageStore>();
+        services.AddSingleton<IOutboxMessageStore>(sp => sp.GetRequiredService<SqlServerMessageStore>());
+        services.AddSingleton<IInboxMessageStore>(sp => sp.GetRequiredService<SqlServerMessageStore>());
+        services.AddSingleton<IIntegrationOutbox, SqlServerIntegrationOutbox>();
         return services;
     }
 }

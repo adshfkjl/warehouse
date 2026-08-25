@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Infrastructure.Persistence;
 
@@ -15,20 +14,13 @@ public sealed class InMemoryIntegrationOutbox : IIntegrationOutbox
         ArgumentNullException.ThrowIfNull(message);
         lock (_sync)
         {
-            if (_messages.ContainsKey(message.IdempotencyKey))
+            if (_messages.TryGetValue(message.IdempotencyKey, out var existing))
             {
+                IntegrationOutboxPayload.EnsureReplayDigest(existing, message);
                 return Task.FromResult(new IntegrationEnqueueResult(true, true, "AlreadyQueued", message.IdempotencyKey));
             }
 
-            var payload = JsonSerializer.Serialize(new
-            {
-                message.Type,
-                message.Source,
-                message.Version,
-                message.CorrelationId,
-                message.Payload,
-                message.PayloadSha256
-            });
+            var payload = IntegrationOutboxPayload.Serialize(message);
             _messages.Add(message.IdempotencyKey, new OutboxMessage(
                 $"integration.{message.Type}",
                 "ExternalIntegration",

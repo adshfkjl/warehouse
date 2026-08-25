@@ -205,7 +205,7 @@ PhysicalStateUnknown -> Executing | Succeeded | Failed | ManualIntervention
 - `ResourceLock` 适用于库位、托盘、装载点和设备。锁包含资源类型/编号、任务持有者、锁令牌、到期时间和乐观版本；过期或已释放锁不得续租，旧版本或非持有者不得续租/释放。
 - `OutboxMessage` 状态为 `Pending`、`Claimed`、`Published`。业务状态变化和待发送命令在一个短事务内写入 `Pending`；Worker 抢占时增加尝试次数和租约，发布后标记 `Published`，失败释放抢占并设置下一次尝试时间。PLC 调用、等待和轮询不得处于同一数据库事务中。
 - `InboxMessage` 状态为 `Pending`、`Claimed`、`Processed`。设备轮询和可选回调先记录消息 ID、幂等键、结果版本和来源；相同消息、相同幂等键的旧版本或重复版本只处理一次。处理完成后才在独立短事务中推进任务和库存；重复消息不能重复扣减、释放或完成。
-- Task 9.2A 已完成 Outbox/Inbox 的 SQL Server EF 映射、唯一去重索引、乐观版本和短事务仓储；本节不代表调度 Worker 已切换到该仓储或设备重启对账已现场验证，这些仍由后续 Task 单独验收。
+- Task 9.2A 已完成 Outbox/Inbox 的 SQL Server EF 映射、唯一去重索引、乐观版本和短事务仓储；Task 9.3 已将外部集成入口在 SQL 模式下切换到该仓储，并保留内存模式。以上不代表调度/发布 Worker 已实现或设备重启对账已现场验证，这些仍由后续 Task 单独验收。
 
 ### 8.4 调度和恢复规则
 

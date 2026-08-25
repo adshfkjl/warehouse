@@ -917,6 +917,34 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **已知风险:** 消息仓储已具备持久化和短事务契约，但当前 API/Worker 尚未将现有内存集成 Outbox 或调度器队列切换到该仓储；SQL Server 跨进程高并发、生产备份保留策略和真实设备消息语义仍需后续 Task 与人工/现场门禁确认。
 
+### Task 9.3：外部集成 Outbox SQL 适配器与运行时组合
+
+**前置条件:** Task 8.1、8.2、9.1 和 9.2A 已达到 `AGENT_VERIFIED`；开发 SQL Server 容器可用；不得连接生产数据库；本 Task 不实现发布 Worker，不修改 PLC 调度器。
+
+**目标:** 将 `/api/integrations/v1` 的外部消息入口在 SQL Server 模式下切换为持久化 Outbox，复用 Task 9.2A 的 `IOutboxMessageStore`/`SqlServerMessageStore`；保留显式内存模式和集成关闭时的独立运行能力。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Infrastructure/Integrations/` 的 SQL 集成 Outbox 适配器及内存实现一致性修复
+- `src/Warehouse.Wms.Infrastructure/Persistence/InventoryPersistenceServiceCollectionExtensions.cs` 的 SQL 组合注册
+- `src/Warehouse.Wms.Api/Program.cs` 的 InMemory/SqlServer 运行时选择
+- `tests/Warehouse.Wms.UnitTests/Integrations/`、`tests/Warehouse.Wms.IntegrationTests/Composition/` 的适配器和组合测试
+- `PROJECT_DESIGN.md`、`docs/integration-contract.md`、`docs/status-dictionary.md`、本计划
+
+**必须完成:**
+- [x] SQL 集成 Outbox 委托 `IOutboxMessageStore` 入队，映射 `IntegrationMessage` 到 `OutboxMessage`，并保持 `Queued`/`AlreadyQueued` 结果语义。
+- [x] 同一幂等键且报文摘要一致时安全重放；摘要冲突拒绝；`ExternalIntegrationsEnabled=false` 时不调用 outbox、不落库且本地 WMS 不受影响。
+- [x] SQL 持久化组合注册 `SqlServerMessageStore`、`IOutboxMessageStore`、`IInboxMessageStore` 和 SQL 集成 Outbox；InMemory 模式继续注册内存实现。
+- [x] 增加适配器映射、摘要冲突和 API/服务组合选择测试；不得连接生产。
+- [x] 不实现发布 Worker，不接入调度器，不修改 PLC 或旧 `warehouse/`。
+
+**验收:** `AGENT_VERIFIED`；定向单元和 API 组合测试通过，SQL 模式解析出 SQL 消息仓储与 SQL 集成 Outbox，内存模式和集成关闭行为保持通过；完整构建/测试和适用质量门禁通过。
+
+**Task 9.3 执行证据（2026-08-25）：** 新增 `SqlServerIntegrationOutbox` 和共享集成消息序列化/摘要校验，内部复用 `IOutboxMessageStore`；SQL 持久化组合注册 `SqlServerMessageStore` 及 Outbox/Inbox 接口，API 仅在 `Wms:PersistenceMode=SqlServer` 时选择 SQL 集成 Outbox，默认 InMemory 模式保持原内存实现。新增 SQL 适配器映射、同键摘要冲突和 API SQL 组合测试；集成关闭路径仍在调用服务层提前返回 `Disabled`，不写 Outbox。定向集成单元测试 6 项、API 组合测试 4 项通过；未实现发布 Worker、未接入调度器，未修改 PLC 或旧 `warehouse/`。完整构建与全量测试待主代理独立复验。
+
+**自动化状态:** `AGENT_VERIFIED`（待主代理独立复验）。
+**外部门禁:** `HUMAN_PENDING`（生产集成启用和消息运维策略待负责人确认）；`FIELD_PENDING`（真实外部系统、设备消息语义和现场恢复未验证）。
+**已知风险:** SQL outbox 已接入入口但尚无发布 Worker；跨进程发布、消息失败重试与外部系统回执仍需后续任务验证。摘要冲突由 SQL 消息仓储拒绝，生产幂等键范围和保留策略仍需确认。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
