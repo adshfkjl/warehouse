@@ -34,7 +34,8 @@ public sealed record StocktakingDeviceTaskResult(
     Guid ItemId,
     WarehouseTask Task,
     DeviceTask DeviceTask,
-    string LoadingPointCode);
+    string LoadingPointCode,
+    ResourceLock? LoadingPointLock = null);
 
 public sealed class StocktakingService
 {
@@ -43,14 +44,17 @@ public sealed class StocktakingService
     private readonly object _gate = new();
     private readonly IReadOnlyList<StocktakingInventoryItem> _inventory;
     private readonly WmsTaskScheduler? _scheduler;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly Dictionary<string, StocktakingTask> _tasks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, StocktakingDeviceTaskResult> _deviceTasks = [];
     private readonly HashSet<string> _activeLoadingPoints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, ResourceLock> _loadingPointLocks = [];
 
-    public StocktakingService(IEnumerable<StocktakingInventoryItem> inventory, WmsTaskScheduler? scheduler = null)
+    public StocktakingService(IEnumerable<StocktakingInventoryItem> inventory, WmsTaskScheduler? scheduler = null, IResourceLockStore? resourceLockStore = null)
     {
         _inventory = inventory?.ToArray() ?? throw new ArgumentNullException(nameof(inventory));
         _scheduler = scheduler;
+        _resourceLockStore = resourceLockStore;
     }
 
     public IReadOnlyCollection<StocktakingTask> Tasks
@@ -113,28 +117,44 @@ public sealed class StocktakingService
         var item = task.Items.FirstOrDefault(candidate => candidate.Id == itemId)
             ?? throw new KeyNotFoundException($"Stocktaking item '{itemId}' was not found.");
         var loadingPoint = Require(loadingPointCode, nameof(loadingPointCode));
+        ResourceLock? persistentLock = null;
         lock (_gate)
         {
             if (_deviceTasks.TryGetValue(itemId, out var existing)) return existing;
-            if (!_activeLoadingPoints.Add(loadingPoint))
+            if (_resourceLockStore is null && !_activeLoadingPoints.Add(loadingPoint))
                 throw new InvalidOperationException($"Loading point '{loadingPoint}' is occupied by another stocktaking item.");
         }
         try
         {
             item.BeginCounting();
             var warehouseTask = new WarehouseTask($"{task.TaskNumber}-ITEM-{itemId:N}", "StocktakingOutbound");
+            if (_resourceLockStore is not null)
+            {
+                persistentLock = await _resourceLockStore.AcquireResourceLockAsync(
+                    "LoadingPoint", loadingPoint, warehouseTask.TaskNumber, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(15), cancellationToken: cancellationToken);
+            }
             var deviceTask = new DeviceTask(
                 $"stocktaking:{task.TaskNumber}:{itemId:D}", warehouseTask.TaskNumber, Require(deviceId, nameof(deviceId)),
                 item.LocationCode, null, loadingPoint, "v1");
             var dispatch = new TaskDispatchRequest(warehouseTask, deviceTask, DeviceOperationKind.Outbound, 0, 1);
             await scheduler.EnqueueAsync(dispatch, cancellationToken);
             var result = new StocktakingDeviceTaskResult(itemId, warehouseTask, deviceTask, loadingPoint);
-            lock (_gate) _deviceTasks.Add(itemId, result);
+            lock (_gate)
+            {
+                _deviceTasks.Add(itemId, result with { LoadingPointLock = persistentLock });
+                if (persistentLock is not null) _loadingPointLocks[itemId] = persistentLock;
+            }
             return result;
         }
         catch
         {
             lock (_gate) _activeLoadingPoints.Remove(loadingPoint);
+            if (persistentLock is not null)
+            {
+                await _resourceLockStore!.ReleaseResourceLockAsync(
+                    persistentLock.Id, persistentLock.OwnerTaskNumber, persistentLock.Version,
+                    DateTimeOffset.UtcNow, persistentLock.LockToken, CancellationToken.None);
+            }
             throw;
         }
     }
@@ -149,7 +169,23 @@ public sealed class StocktakingService
         task.TransitionTo(task.Items.Any(item => item.State == StocktakingItemState.Difference)
             ? StocktakingState.CompletedWithErrors
             : StocktakingState.Completed);
+        ReleaseAllLoadingPointLocksAsync().GetAwaiter().GetResult();
         return task;
+    }
+
+    private async Task ReleaseAllLoadingPointLocksAsync()
+    {
+        ResourceLock[] locks;
+        lock (_gate) locks = _loadingPointLocks.Values.Where(item => item.IsActive()).ToArray();
+        if (_resourceLockStore is not null)
+        {
+            foreach (var resourceLock in locks)
+                await _resourceLockStore.ReleaseResourceLockAsync(resourceLock.Id, resourceLock.OwnerTaskNumber, resourceLock.Version, DateTimeOffset.UtcNow, resourceLock.LockToken);
+        }
+        else
+        {
+            foreach (var resourceLock in locks) resourceLock.Release(resourceLock.OwnerTaskNumber, resourceLock.Version, DateTimeOffset.UtcNow, resourceLock.LockToken);
+        }
     }
 
     public StocktakingTask Get(string taskNumber)

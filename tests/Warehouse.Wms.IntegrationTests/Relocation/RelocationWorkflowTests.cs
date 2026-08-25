@@ -34,6 +34,25 @@ public sealed class RelocationWorkflowTests
         Assert.Single(inventory.GetTransactions().Where(item => item.Type == InventoryTransactionType.Move));
     }
 
+    [Fact]
+    public async Task Relocation_uses_persistent_resource_locks()
+    {
+        var source = Guid.NewGuid();
+        var destination = Guid.NewGuid();
+        var material = Guid.NewGuid();
+        var pallet = Guid.NewGuid();
+        var inventory = new InventoryService();
+        await inventory.IncreaseAsync(material, pallet, source, "B-02", 1m, 1m, new InventoryOperationContext("persistent-seed"));
+        var store = new InMemoryTaskPersistenceStore();
+        var service = new RelocationService(inventory, new WmsTaskScheduler(new ScenarioGateway()), store);
+
+        var result = await service.SubmitAsync(new RelocationRequest(
+            "persistent-relocation", material, pallet, source, destination, 1m, 1m, "PLC-01", "B-02"));
+
+        var active = await store.GetActiveResourceLocksAsync();
+        Assert.Equal(result.ResourceLocks.Select(lockRecord => lockRecord.Id).OrderBy(id => id), active.Select(lockRecord => lockRecord.Id).OrderBy(id => id));
+    }
+
     private sealed class ScenarioGateway : IWarehouseDeviceGateway
     {
         public Task<DeviceOperationResult> SubmitInboundAsync(DeviceTask task, CancellationToken cancellationToken = default) => Submit(task);

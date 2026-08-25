@@ -100,7 +100,23 @@ public sealed class OutboundWorkflowTests
             new OutboundTaskRequest("outbound-task-006", "PLC-01", fixture.LoadingPoint.Id)));
     }
 
-    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false)
+    [Fact]
+    public async Task Persistent_loading_point_lock_is_released_after_review()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, resourceLockStore: store);
+        var tasks = fixture.Tasks;
+        var review = fixture.Review;
+        var allocation = fixture.Allocate("outbound-persistent");
+        var submitted = await tasks.SubmitAsync(allocation, new OutboundTaskRequest("outbound-persistent", "PLC-01", fixture.LoadingPoint.Id));
+
+        await review.ProcessDeviceResultAsync(submitted.Task.TaskNumber, DeviceOperationStatus.Succeeded);
+        await review.ReviewAsync(submitted.Task.TaskNumber, new OutboundReviewRequest(fixture.PalletId.ToString("D"), 10m, true));
+
+        Assert.Empty(await store.GetActiveResourceLocksAsync());
+    }
+
+    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false, IResourceLockStore? resourceLockStore = null)
     {
         var materialId = Guid.NewGuid();
         var palletId = Guid.NewGuid();
@@ -108,13 +124,13 @@ public sealed class OutboundWorkflowTests
         var inventory = new InventoryService();
         inventory.IncreaseAsync(materialId, palletId, locationId, null, 5m, 25m,
             new InventoryOperationContext("seed-outbound")).GetAwaiter().GetResult();
-        var allocationService = new OutboundAllocationService(inventory);
+        var allocationService = new OutboundAllocationService(inventory, resourceLockStore);
         var order = allocationService.Create("OB-WORKFLOW-001");
         order.AddLine(new OutboundLine(materialId, 2m, palletId: palletId, locationId: locationId));
         var loadingPoint = new LoadingPoint("LP-OUT-01", "出库口");
         var gateway = new ScenarioGateway(status);
         var scheduler = new WmsTaskScheduler(gateway);
-        var tasks = new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)]);
+        var tasks = new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)], resourceLockStore);
         var review = new OutboundReviewService(tasks, inventory);
         return new Fixture(materialId, palletId, locationId, new Location(locationId, "A-OUT-01", 1, 100m, 1000m, 1000m, 1000m), loadingPoint, inventory, allocationService, order, tasks, review);
     }

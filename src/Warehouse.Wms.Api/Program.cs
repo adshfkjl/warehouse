@@ -23,6 +23,7 @@ using Warehouse.Wms.Application.Reports;
 using Warehouse.Wms.Application.Points;
 using Warehouse.Wms.Infrastructure.Reports;
 using Warehouse.Wms.Infrastructure.Warehouse;
+using Warehouse.Wms.Infrastructure.Background;
 
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 
@@ -38,12 +39,18 @@ builder.Services.AddControllers();
 builder.Services.AddSingleton<SimulatedDeviceGateway>();
 builder.Services.AddSingleton<IWarehouseDeviceGateway>(sp => sp.GetRequiredService<SimulatedDeviceGateway>());
 builder.Services.AddSingleton<TaskSchedulerState>();
+builder.Services.AddSingleton<TaskWorker>();
+builder.Services.AddSingleton<WorkflowRecoveryService>(sp => new WorkflowRecoveryService(
+    sp.GetRequiredService<ITaskPersistenceStore>()));
+builder.Services.AddHostedService<TaskWorkerHostedService>();
 builder.Services.AddSingleton<WmsTaskScheduler>(sp => new WmsTaskScheduler(
     sp.GetRequiredService<IWarehouseDeviceGateway>(),
     DeviceCapability.TaskKeyDeduplication | DeviceCapability.TaskQuery | DeviceCapability.StopControl,
     sp.GetRequiredService<TaskSchedulerState>(),
     sp.GetService<ITaskCommandOutbox>(),
-    builder.Configuration["Wms:SchedulerWorkerId"]));
+    builder.Configuration["Wms:SchedulerWorkerId"],
+    persistenceStore: sp.GetService<ITaskPersistenceStore>(),
+    resourceLockStore: sp.GetService<IResourceLockStore>()));
 
 var configuredPersistenceMode = builder.Configuration["Wms:PersistenceMode"];
 if (string.IsNullOrWhiteSpace(configuredPersistenceMode) && builder.Environment.IsProduction())
@@ -87,13 +94,30 @@ else
 }
 builder.Services.AddSingleton<InboundOrderService>();
 builder.Services.AddSingleton<PutawayAllocationService>();
-builder.Services.AddSingleton<PutawayTaskService>();
-builder.Services.AddSingleton<InboundReconciliationService>();
-builder.Services.AddSingleton<OutboundAllocationService>();
-builder.Services.AddSingleton<OutboundTaskService>();
+builder.Services.AddSingleton<PutawayTaskService>(sp => new PutawayTaskService(
+    sp.GetRequiredService<InboundOrderService>(),
+    sp.GetRequiredService<PutawayAllocationService>(),
+    sp.GetRequiredService<WmsTaskScheduler>(),
+    sp.GetService<IResourceLockStore>()));
+builder.Services.AddSingleton<InboundReconciliationService>(sp => new InboundReconciliationService(
+    sp.GetRequiredService<InboundOrderService>(),
+    sp.GetRequiredService<PutawayTaskService>(),
+    sp.GetRequiredService<InventoryService>(),
+    sp.GetService<IResourceLockStore>()));
+builder.Services.AddSingleton<OutboundAllocationService>(sp => new OutboundAllocationService(
+    sp.GetRequiredService<InventoryService>(), sp.GetService<IResourceLockStore>()));
+builder.Services.AddSingleton<OutboundTaskService>(sp => new OutboundTaskService(
+    sp.GetRequiredService<OutboundAllocationService>(),
+    sp.GetRequiredService<WmsTaskScheduler>(),
+    Array.Empty<OutboundLoadingPoint>(),
+    sp.GetService<IResourceLockStore>()));
 builder.Services.AddSingleton<OutboundReviewService>();
-builder.Services.AddSingleton<RelocationService>();
-builder.Services.AddSingleton<StocktakingService>();
+builder.Services.AddSingleton<RelocationService>(sp => new RelocationService(
+    sp.GetRequiredService<InventoryService>(), sp.GetRequiredService<WmsTaskScheduler>(), sp.GetService<IResourceLockStore>()));
+builder.Services.AddSingleton<StocktakingService>(sp => new StocktakingService(
+    sp.GetService<IEnumerable<StocktakingInventoryItem>>() ?? Array.Empty<StocktakingInventoryItem>(),
+    sp.GetService<WmsTaskScheduler>(),
+    sp.GetService<IResourceLockStore>()));
 builder.Services.AddScoped<StocktakingDifferenceService>();
 builder.Services.AddScoped<ExceptionWorkItemService>();
 builder.Services.AddScoped<PhysicalResultConfirmationService>();

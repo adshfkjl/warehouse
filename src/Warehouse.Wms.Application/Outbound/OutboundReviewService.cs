@@ -81,8 +81,8 @@ public sealed class OutboundReviewService
             new InventoryOperationContext($"outbound:{taskNumber}:decrease", task.Allocation.Order.OrderNumber, taskNumber, "review", "出库复核通过"),
             cancellationToken);
         task.Allocation.Order.TransitionTo(OutboundState.Completed);
-        OutboundTaskService.ReleaseLoadingPoint(task);
-        OutboundTaskService.ReleaseAllocationResources(task);
+        await _tasks.ReleaseLoadingPointAsync(task);
+        await _tasks.ReleaseAllocationResourcesAsync(task);
         return Store(taskNumber, new OutboundReviewResult(taskNumber, OutboundReviewStatus.Completed, transaction));
     }
 

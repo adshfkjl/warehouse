@@ -223,6 +223,11 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.Property(x => x.TaskNumber).HasMaxLength(128).IsRequired();
             entity.Property(x => x.TaskType).HasMaxLength(64).IsRequired();
             entity.Property(x => x.State).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.DispatchContextJson).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.WorkflowKind).HasMaxLength(64);
+            entity.Property(x => x.WorkflowReference).HasMaxLength(256);
+            entity.Property(x => x.WorkflowSnapshotJson).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.WorkflowRecoveryStatus).HasConversion<string>().HasMaxLength(64).IsRequired();
             entity.Property(x => x.Version).IsConcurrencyToken();
             entity.HasIndex(x => x.TaskNumber).IsUnique();
             entity.HasMany(x => x.StateHistory).WithOne().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);

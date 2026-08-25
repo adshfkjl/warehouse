@@ -62,7 +62,21 @@ public sealed class PutawayCompletionTests
         Assert.All(submitted.ResourceLocks, item => Assert.Null(item.ReleasedAt));
     }
 
-    private static Fixture CreateFixture(DeviceOperationStatus submissionStatus, decimal weightKg)
+    [Fact]
+    public async Task Persistent_putaway_lock_is_released_only_after_success()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, 10m, store);
+        var submitted = await fixture.Putaway.SubmitAsync(fixture.Pending,
+            new PutawayTaskRequest("putaway-persistent-001", "PLC-01", fixture.LoadingPoint.Id));
+        Assert.NotEmpty(await store.GetActiveResourceLocksAsync());
+
+        await fixture.Reconciliation.CompleteAsync(submitted.Task.TaskNumber);
+
+        Assert.Empty(await store.GetActiveResourceLocksAsync());
+    }
+
+    private static Fixture CreateFixture(DeviceOperationStatus submissionStatus, decimal weightKg, IResourceLockStore? resourceLockStore = null)
     {
         var materialId = Guid.NewGuid();
         var palletId = Guid.NewGuid();
@@ -76,7 +90,7 @@ public sealed class PutawayCompletionTests
             [new PutawayLocationCandidate(location)],
             [new PutawayLoadingPointCandidate(loadingPoint, HasPallet: true)]);
         var scheduler = new WmsTaskScheduler(new ScenarioGateway(submissionStatus));
-        var putaway = new PutawayTaskService(inbound, allocation, scheduler);
+        var putaway = new PutawayTaskService(inbound, allocation, scheduler, resourceLockStore);
         return new Fixture(
             materialId,
             palletId,
@@ -86,7 +100,8 @@ public sealed class PutawayCompletionTests
             putaway,
             new InventoryService(),
             inbound,
-            allocation);
+            allocation,
+            resourceLockStore);
     }
 
     private sealed record Fixture(
@@ -98,12 +113,13 @@ public sealed class PutawayCompletionTests
         PutawayTaskService Putaway,
         InventoryService Inventory,
         InboundOrderService Inbound,
-        PutawayAllocationService Allocation)
+        PutawayAllocationService Allocation,
+        IResourceLockStore? ResourceLockStore)
     {
         private InboundReconciliationService? _reconciliation;
 
         public InboundReconciliationService Reconciliation
-            => _reconciliation ??= new(Inbound, Putaway, Inventory);
+            => _reconciliation ??= new(Inbound, Putaway, Inventory, ResourceLockStore);
     }
 
     private sealed class ScenarioGateway(DeviceOperationStatus submissionStatus) : IWarehouseDeviceGateway

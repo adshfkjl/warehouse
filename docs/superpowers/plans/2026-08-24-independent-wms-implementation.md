@@ -1066,13 +1066,32 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **目标:** 将 `TaskScheduler`、入库/出库/移库/盘点业务服务的任务创建、状态迁移、幂等登记和资源锁操作接入 `ITaskPersistenceStore`/`IResourceLockStore`，并实现服务重启后从 SQL 恢复未完成任务而不重复下发设备命令。
 
 **必须完成:**
-- [ ] 调度器不再以 `TaskSchedulerState.Requests` 作为 SQL 模式业务真相；内存状态只作短期调度缓存。
-- [ ] 任务入队、Dispatching/SentToPlc/Executing/终态迁移、设备结果和异常处置均提交 SQL 状态历史与版本。
-- [ ] 业务锁获取/续租/释放使用持久化锁，设备等待期间不持有数据库事务。
-- [ ] Worker 启动扫描未完成任务、对账 Outbox/Inbox 和设备任务号能力；无法确认的任务进入 `PhysicalStateUnknown`，不得重复下发。
-- [ ] 增加 API SQL 组合、跨进程调度、服务重启、并发版本冲突和设备命令不重复发送测试。
+- [x] 调度器不再以 `TaskSchedulerState.Requests` 作为 SQL 模式业务真相；内存状态只作短期调度缓存。重启时恢复执行中设备占用，避免同设备队列并发。
+- [x] 任务入队、Dispatching/SentToPlc/Executing/终态迁移、设备结果和异常处置均提交 SQL 状态历史与版本；工作流引用、调度快照和恢复状态同步持久化。
+- [x] 业务锁获取/续租/释放使用持久化锁，设备等待期间不持有数据库事务。出库装载点锁和入库成功释放均通过 `IResourceLockStore`。
+- [x] Worker 启动扫描未完成任务、对账 Outbox/Inbox 和设备任务号能力；无法确认的任务进入 `PhysicalStateUnknown`，不得重复下发。
+- [x] 增加 API SQL 组合、跨进程调度、服务重启、并发版本冲突和设备命令不重复发送测试；Docker SQL Server 定向场景通过。
 
 **验收:** `AGENT_VERIFIED`；SQL 模式业务闭环和重启恢复测试通过，内存模式仅在显式开发/测试配置可用；真实 PLC 恢复仍需 `FIELD_PENDING`。
+
+**执行记录（2026-08-26）：** terra 修复有效工作流快照被启动恢复误阻塞的问题：有效 JSON 对象标记 `RecoveredFromSnapshot`，缺失或非法快照标记 `BlockedMissingBusinessState`；调度器通过 SQL `ResourceLock(ResourceType=Device)` 实现跨进程同设备租约，成功/明确失败释放，执行中或物理未知保留；Worker 启动恢复和盘点完成后的持久化装载点锁释放均有测试。新增/更新迁移 `20260825184844_TaskDispatchContextModel`、`20260825191213_WorkflowRecoveryContext`。主代理独立验证：构建 0 警告/0 错误；Unit 131、Integration 43（无 SQL 环境时 7 项跳过）、设备契约 37；Docker SQL Server 下任务持久化/重启/跨进程设备租约 3 项、消息持久化 3 项通过；`warehouse/` 无变化。当前状态 `DONE_WITH_CONCERNS`：任务元数据和设备调度可恢复，但入库、出库、移库、盘点业务聚合仍以进程内字典/对象为主，尚无完整 SQL 投影和跨进程重建；API 仍需从基础资料提供出库装载点，不能据此宣称生产业务闭环已完成。真实 PLC 恢复继续为 `FIELD_PENDING`。本地提交 `c350414` 已生成；向 `origin`/`target` 的推送因 GitHub 网络连接未完成，状态 `PUSH_PENDING`，不阻塞本地继续执行。
+
+### Task 9.7：入库、出库、移库、盘点业务聚合持久化与恢复
+
+**前置条件:** Task 9.6 达到 `AGENT_VERIFIED` 的调度/设备恢复子集；基础资料持久化边界已确定；不得连接生产 PLC、生产数据库或 ERP。
+
+**目标:** 将四类仓储业务服务当前的进程内订单、分配、盘点范围、任务结果和库存结算上下文提升为 SQL 事实，并在 Worker 重启或跨进程启动时按版本重建聚合；不得以仅恢复任务元数据代替业务恢复。
+
+**必须完成:**
+
+- [ ] 为入库单/收货/上架、出库单/分配/复核、移库单、盘点单及其明细定义持久化实体、状态历史、幂等键和关联任务引用。
+- [ ] 为业务服务提供 SQL/InMemory 对等存储边界；所有库存变化继续通过库存账短事务完成，禁止设备等待处于事务中。
+- [ ] Worker 启动按业务引用和快照版本重建聚合；缺失、冲突或校验失败进入异常工作项，不得自动释放资源或重复结算。
+- [ ] 增加 SQL 重启、跨进程并发、版本冲突、重复回放、锁释放和任务结果幂等测试，覆盖入库、出库、移库、盘点四条闭环。
+
+**验收:** `AGENT_VERIFIED`；SQL 空库迁移、API 组合、完整构建/测试、Docker 重启恢复和四类业务闭环证据齐全。真实 PLC 和现场账实继续由 `FIELD_PENDING` 门禁管理。
+
+**已知风险：** 当前 SQL 设备租约已验证顺序争抢和重启恢复；真实同时并发 `DispatchNextAsync` 仍可能触发 SQL Server deadlock victim，Task 9.7 的持久化实现必须增加死锁重试/锁顺序设计和并发验收，不得将顺序争抢测试当作完全并发安全证明。
 
 ## 十三、阶段门禁和最终标准
 

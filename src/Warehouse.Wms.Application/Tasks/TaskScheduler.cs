@@ -1,6 +1,7 @@
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.Domain.Devices;
 using Warehouse.Wms.Domain.Tasks;
+using System.Text.Json;
 
 namespace Warehouse.Wms.Application.Tasks;
 
@@ -54,6 +55,24 @@ public sealed record TaskDispatchResult(
     string? ErrorCode = null,
     string? ErrorMessage = null);
 
+internal sealed record PersistedDispatchContext(
+    string IdempotencyKey, string WmsTaskId, string DeviceId, string? SourceLocation,
+    string? DestinationLocation, string? LoadingPoint, string ProtocolVersion,
+    DeviceOperationKind OperationKind, int Priority, int MaxAttempts, int AttemptCount,
+    string? DeviceTaskNumber)
+{
+    public static string Serialize(TaskDispatchRequest request) => JsonSerializer.Serialize(new PersistedDispatchContext(
+        request.DeviceTask.IdempotencyKey, request.DeviceTask.WmsTaskId, request.DeviceTask.DeviceId,
+        request.DeviceTask.SourceLocation, request.DeviceTask.DestinationLocation, request.DeviceTask.LoadingPoint,
+        request.DeviceTask.ProtocolVersion, request.OperationKind, request.Priority, request.MaxAttempts,
+        request.AttemptCount, request.DeviceTaskNumber));
+
+    public TaskDispatchRequest ToRequest(WarehouseTask task) => new(
+        task,
+        new DeviceTask(IdempotencyKey, WmsTaskId, DeviceId, SourceLocation, DestinationLocation, LoadingPoint, ProtocolVersion),
+        OperationKind, Priority, MaxAttempts) { AttemptCount = AttemptCount, DeviceTaskNumber = DeviceTaskNumber };
+}
+
 public sealed class TaskSchedulerState
 {
     internal Dictionary<string, TaskDispatchRequest> Requests { get; } = new(StringComparer.Ordinal);
@@ -61,6 +80,7 @@ public sealed class TaskSchedulerState
     internal Dictionary<string, long> LatestObservationVersions { get; } = new(StringComparer.Ordinal);
 
     internal HashSet<string> ActiveDevices { get; } = new(StringComparer.Ordinal);
+    internal Dictionary<string, ResourceLock> DeviceLeases { get; } = new(StringComparer.Ordinal);
 }
 
 public sealed class TaskScheduler
@@ -73,6 +93,8 @@ public sealed class TaskScheduler
     private readonly ITaskCommandOutbox? _commandOutbox;
     private readonly string _workerId;
     private readonly TimeSpan _outboxLease;
+    private readonly ITaskPersistenceStore? _persistenceStore;
+    private readonly IResourceLockStore? _resourceLockStore;
 
     public TaskScheduler(
         IWarehouseDeviceGateway gateway,
@@ -80,7 +102,9 @@ public sealed class TaskScheduler
         TaskSchedulerState? state = null,
         ITaskCommandOutbox? commandOutbox = null,
         string? workerId = null,
-        TimeSpan? outboxLease = null)
+        TimeSpan? outboxLease = null,
+        ITaskPersistenceStore? persistenceStore = null,
+        IResourceLockStore? resourceLockStore = null)
     {
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _capabilities = capabilities;
@@ -88,6 +112,8 @@ public sealed class TaskScheduler
         _commandOutbox = commandOutbox;
         _workerId = string.IsNullOrWhiteSpace(workerId) ? Environment.MachineName + ":scheduler" : workerId.Trim();
         _outboxLease = outboxLease ?? DefaultOutboxLease;
+        _persistenceStore = persistenceStore;
+        _resourceLockStore = resourceLockStore ?? persistenceStore as IResourceLockStore;
         if (_outboxLease <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(outboxLease), _outboxLease, "Outbox lease must be positive.");
@@ -110,7 +136,7 @@ public sealed class TaskScheduler
                         $"Task '{request.Task.TaskNumber}' is already queued with a different device command.");
                 }
 
-                return Task.CompletedTask;
+                return PersistTaskStateAsync(request, cancellationToken);
             }
 
             if (request.Task.State == TaskState.Created)
@@ -128,9 +154,19 @@ public sealed class TaskScheduler
                 throw new InvalidOperationException($"Task '{request.Task.TaskNumber}' is not queueable from '{request.Task.State}'.");
             }
 
-            _state.Requests.Add(request.Task.TaskNumber, request);
-            return Task.CompletedTask;
+        _state.Requests.Add(request.Task.TaskNumber, request);
         }
+
+        request.Task.SetDispatchContext(PersistedDispatchContext.Serialize(request));
+        if (string.IsNullOrWhiteSpace(request.Task.WorkflowKind))
+        {
+            request.Task.SetWorkflowContext(
+                request.OperationKind.ToString(),
+                request.Task.TaskNumber,
+                request.Task.DispatchContextJson!);
+            request.Task.MarkWorkflowRecovered();
+        }
+        return PersistTaskStateAsync(request, cancellationToken);
     }
 
     public async Task<TaskDispatchResult?> DispatchNextAsync(CancellationToken cancellationToken = default)
@@ -139,7 +175,9 @@ public sealed class TaskScheduler
         lock (_gate)
         {
             request = _state.Requests.Values
-                .Where(candidate => candidate.Task.State == TaskState.Queued && !_state.ActiveDevices.Contains(candidate.DeviceTask.DeviceId))
+                .Where(candidate => candidate.Task.State == TaskState.Queued
+                    && candidate.Task.WorkflowRecoveryStatus != WorkflowRecoveryStatus.BlockedMissingBusinessState
+                    && !_state.ActiveDevices.Contains(candidate.DeviceTask.DeviceId))
                 .OrderByDescending(candidate => candidate.Priority)
                 .ThenBy(candidate => candidate.Task.TaskNumber, StringComparer.Ordinal)
                 .FirstOrDefault();
@@ -154,6 +192,30 @@ public sealed class TaskScheduler
             _state.ActiveDevices.Add(request.DeviceTask.DeviceId);
         }
 
+        if (_resourceLockStore is not null)
+        {
+            try
+            {
+                var lease = await _resourceLockStore.AcquireResourceLockAsync(
+                    "Device", request.DeviceTask.DeviceId, request.Task.TaskNumber,
+                    DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), cancellationToken: cancellationToken);
+                lock (_gate) _state.DeviceLeases[request.Task.TaskNumber] = lease;
+            }
+            catch (InvalidOperationException)
+            {
+                lock (_gate)
+                {
+                    request.Task.TransitionTo(TaskState.Queued, "scheduler", "device is leased by another worker", "DEVICE_LEASE_BUSY");
+                    _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                }
+                await PersistTaskStateAsync(request, CancellationToken.None);
+                return null;
+            }
+        }
+
+        // Durable state must be visible before any device call can occur.
+        await PersistTaskStateAsync(request, cancellationToken);
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -165,6 +227,8 @@ public sealed class TaskScheduler
                 request.Task.TransitionTo(TaskState.Queued, "scheduler", "dispatch canceled before device call", "DISPATCH_CANCELED");
                 _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
             }
+
+            await PersistTaskStateAsync(request, CancellationToken.None);
 
             throw;
         }
@@ -187,6 +251,7 @@ public sealed class TaskScheduler
                     _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
                 }
 
+                await PersistTaskStateAsync(request, CancellationToken.None);
                 return null;
             }
         }
@@ -214,6 +279,8 @@ public sealed class TaskScheduler
                 request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "scheduler", "physical result requires reconciliation", "PHYSICAL_UNKNOWN");
             }
 
+            await PersistTaskStateAsync(request, CancellationToken.None);
+
             throw;
         }
         catch (Exception exception)
@@ -228,6 +295,7 @@ public sealed class TaskScheduler
                 request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "scheduler", "physical result requires reconciliation", "PHYSICAL_UNKNOWN");
             }
 
+            await PersistTaskStateAsync(request, CancellationToken.None);
             return new TaskDispatchResult(
                 request,
                 DeviceOperationStatus.PhysicalStateUnknown,
@@ -238,6 +306,7 @@ public sealed class TaskScheduler
 
         TaskDispatchResult dispatchResult;
         var markPublished = false;
+        var releaseDeviceLease = false;
         string? outboxFailure = null;
         var nextAttemptAt = DateTimeOffset.MaxValue;
         lock (_gate)
@@ -276,6 +345,7 @@ public sealed class TaskScheduler
                     request.Task.TransitionTo(TaskState.Executing, "gateway", "device completion reported");
                     request.Task.TransitionTo(TaskState.Succeeded, "gateway", "device completed");
                     _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    releaseDeviceLease = true;
                     markPublished = true;
                 }
                 else if (result.Status is DeviceOperationStatus.PhysicalStateUnknown or DeviceOperationStatus.TimedOut or DeviceOperationStatus.Unknown)
@@ -293,6 +363,7 @@ public sealed class TaskScheduler
                     {
                         request.Task.TransitionTo(TaskState.Queued, "scheduler", "dispatch will be retried", result.ErrorCode);
                         _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                        releaseDeviceLease = true;
                         nextAttemptAt = DateTimeOffset.UtcNow;
                     }
                     else
@@ -301,6 +372,7 @@ public sealed class TaskScheduler
                     }
 
                     _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    if (request.Task.State is TaskState.Failed) releaseDeviceLease = true;
                     outboxFailure = result.ErrorCode ?? result.Status.ToString();
                 }
 
@@ -320,13 +392,18 @@ public sealed class TaskScheduler
             }
         }
 
+        if (releaseDeviceLease)
+            await ReleaseDeviceLeaseAsync(request);
+
+        await PersistTaskStateAsync(request, CancellationToken.None);
         return dispatchResult;
     }
 
-    internal Task<bool> ApplyObservationAsync(TaskDispatchRequest request, DeviceResultObservation observation)
+    internal async Task<bool> ApplyObservationAsync(TaskDispatchRequest request, DeviceResultObservation observation)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(observation);
+        var releaseDeviceLease = false;
         lock (_gate)
         {
             if (!string.Equals(request.DeviceTaskNumber, observation.DeviceTaskNumber, StringComparison.Ordinal))
@@ -338,7 +415,7 @@ public sealed class TaskScheduler
             if (_state.LatestObservationVersions.TryGetValue(observation.DeviceTaskNumber, out var latestVersion)
                 && observation.ResultVersion <= latestVersion)
             {
-                return Task.FromResult(false);
+                return false;
             }
 
             _state.LatestObservationVersions[observation.DeviceTaskNumber] = observation.ResultVersion;
@@ -363,6 +440,7 @@ public sealed class TaskScheduler
                     }
 
                     _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    releaseDeviceLease = true;
                     break;
                 case DeviceOperationStatus.Failed:
                     if (request.Task.State is TaskState.SentToPlc or TaskState.Executing)
@@ -371,6 +449,7 @@ public sealed class TaskScheduler
                     }
 
                     _state.ActiveDevices.Remove(request.DeviceTask.DeviceId);
+                    releaseDeviceLease = true;
                     break;
                 case DeviceOperationStatus.TimedOut:
                 case DeviceOperationStatus.Offline:
@@ -400,8 +479,60 @@ public sealed class TaskScheduler
                     break;
             }
 
-            return Task.FromResult(true);
         }
+
+        if (releaseDeviceLease)
+            await ReleaseDeviceLeaseAsync(request);
+        await PersistTaskStateAsync(request, CancellationToken.None);
+        return true;
+    }
+
+    private async Task PersistTaskStateAsync(TaskDispatchRequest request, CancellationToken cancellationToken)
+    {
+        if (_persistenceStore is null)
+        {
+            return;
+        }
+
+        request.Task.SetDispatchContext(PersistedDispatchContext.Serialize(request));
+
+        var persisted = await _persistenceStore.GetTaskAsync(request.Task.TaskNumber, cancellationToken);
+        if (persisted is null)
+        {
+            await _persistenceStore.CreateTaskAsync(request.Task, cancellationToken);
+            persisted = await _persistenceStore.GetTaskAsync(request.Task.TaskNumber, cancellationToken);
+        }
+
+        if (persisted is null)
+        {
+            return;
+        }
+
+        if (persisted.Version > request.Task.Version
+            || (persisted.Version == request.Task.Version && persisted.State != request.Task.State))
+        {
+            throw new InvalidOperationException($"Task '{request.Task.TaskNumber}' persistence conflict at version {request.Task.Version}.");
+        }
+
+        if (persisted.Version == request.Task.Version)
+        {
+            await _persistenceStore.UpdateDispatchContextAsync(request.Task.TaskNumber, request.Task.DispatchContextJson!, cancellationToken);
+            return;
+        }
+
+        foreach (var history in request.Task.StateHistory.Where(x => x.Version > persisted.Version).OrderBy(x => x.Version))
+        {
+            persisted = await _persistenceStore.TransitionTaskAsync(
+                request.Task.TaskNumber,
+                persisted.Version,
+                history.ToState,
+                history.Operator,
+                history.Reason,
+                history.ErrorCode,
+                history.OccurredAt,
+                cancellationToken);
+        }
+        await _persistenceStore.UpdateDispatchContextAsync(request.Task.TaskNumber, request.Task.DispatchContextJson!, cancellationToken);
     }
 
     public async Task RecoverInFlightAsync(CancellationToken cancellationToken = default)
@@ -427,6 +558,8 @@ public sealed class TaskScheduler
                         request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "worker", "physical result requires reconciliation", "PHYSICAL_UNKNOWN");
                     }
                 }
+
+                await PersistTaskStateAsync(request, cancellationToken);
 
                 continue;
             }
@@ -459,7 +592,102 @@ public sealed class TaskScheduler
                         request.Task.TransitionTo(TaskState.PhysicalStateUnknown, "worker", "physical result requires reconciliation", "PHYSICAL_UNKNOWN");
                     }
                 }
+                await PersistTaskStateAsync(request, cancellationToken);
             }
         }
     }
+
+    /// <summary>Marks durable in-flight work unknown when a restarted process has no safe device command payload to replay.</summary>
+    public async Task RecoverPersistedInFlightAsync(CancellationToken cancellationToken = default)
+    {
+        if (_persistenceStore is null)
+        {
+            return;
+        }
+
+        var tasks = await _persistenceStore.GetTasksByStatesAsync(
+            [TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Executing], cancellationToken);
+        foreach (var task in tasks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PersistedDispatchContext? context = null;
+            if (!string.IsNullOrWhiteSpace(task.DispatchContextJson))
+            {
+                try
+                {
+                    context = JsonSerializer.Deserialize<PersistedDispatchContext>(task.DispatchContextJson);
+                    if (context is not null)
+                    {
+                        lock (_gate)
+                        {
+                            if (!_state.Requests.ContainsKey(task.TaskNumber))
+                                _state.Requests[task.TaskNumber] = context.ToRequest(task);
+                            if (task.State is TaskState.Dispatching or TaskState.SentToPlc or TaskState.Executing)
+                                _state.ActiveDevices.Add(context.DeviceId);
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    await _persistenceStore.MarkWorkflowRecoveryBlockedAsync(task.TaskNumber, "DISPATCH_CONTEXT_INVALID", cancellationToken);
+                    continue;
+                }
+            }
+            if (task.WorkflowRecoveryStatus == WorkflowRecoveryStatus.BlockedMissingBusinessState)
+                continue;
+            if (context is null && task.State == TaskState.Queued)
+            {
+                await _persistenceStore.MarkWorkflowRecoveryBlockedAsync(task.TaskNumber, "DISPATCH_CONTEXT_MISSING", cancellationToken);
+                continue;
+            }
+            if (task.State == TaskState.Queued)
+            {
+                // Queued work has no device side effect; reconstructed requests are
+                // intentionally left eligible for DispatchNextAsync.
+                continue;
+            }
+            if (task.State is TaskState.Dispatching or TaskState.SentToPlc or TaskState.Executing)
+            {
+                // A persisted device task number is sufficient to reconcile with
+                // the gateway after restart. Keep the in-flight state intact so
+                // RecoverInFlightAsync can query it instead of declaring it
+                // unknown before the device has been consulted.
+                if (context is not null && !string.IsNullOrWhiteSpace(context.DeviceTaskNumber))
+                {
+                    continue;
+                }
+                var timedOut = await _persistenceStore.TransitionTaskAsync(
+                    task.TaskNumber, task.Version, TaskState.TimedOut,
+                    "worker", "restart cannot safely reconstruct device command", "RESTART_REQUIRES_RECONCILIATION", cancellationToken: cancellationToken);
+                await _persistenceStore.TransitionTaskAsync(
+                    task.TaskNumber, timedOut.Version, TaskState.PhysicalStateUnknown,
+                    "worker", "physical result requires reconciliation", "PHYSICAL_UNKNOWN", cancellationToken: cancellationToken);
+            }
+        }
+    }
+
+    public Task<ResourceLock> AcquireResourceLockAsync(string resourceType, string resourceId, string ownerTaskNumber, DateTimeOffset acquiredAt, TimeSpan leaseDuration, Guid? lockToken = null, CancellationToken cancellationToken = default)
+        => (_resourceLockStore ?? throw new InvalidOperationException("A resource lock store is required for persistent scheduling."))
+            .AcquireResourceLockAsync(resourceType, resourceId, ownerTaskNumber, acquiredAt, leaseDuration, lockToken, cancellationToken);
+
+    private async Task ReleaseDeviceLeaseAsync(TaskDispatchRequest request)
+    {
+        if (_resourceLockStore is null) return;
+        ResourceLock? lease;
+        lock (_gate)
+        {
+            _state.DeviceLeases.TryGetValue(request.Task.TaskNumber, out lease);
+            _state.DeviceLeases.Remove(request.Task.TaskNumber);
+        }
+        if (lease is not null && lease.IsActive())
+            await _resourceLockStore.ReleaseResourceLockAsync(lease.Id, request.Task.TaskNumber, lease.Version, DateTimeOffset.UtcNow, lease.LockToken, CancellationToken.None);
+    }
+
+    public Task<ResourceLock> RenewResourceLockAsync(Guid lockId, string ownerTaskNumber, int expectedVersion, DateTimeOffset renewedAt, TimeSpan leaseDuration, Guid lockToken, CancellationToken cancellationToken = default)
+        => (_resourceLockStore ?? throw new InvalidOperationException("A resource lock store is required for persistent scheduling."))
+            .RenewResourceLockAsync(lockId, ownerTaskNumber, expectedVersion, renewedAt, leaseDuration, lockToken, cancellationToken);
+
+    public Task ReleaseResourceLockAsync(Guid lockId, string ownerTaskNumber, int expectedVersion, DateTimeOffset releasedAt, Guid lockToken, CancellationToken cancellationToken = default)
+        => (_resourceLockStore ?? throw new InvalidOperationException("A resource lock store is required for persistent scheduling."))
+            .ReleaseResourceLockAsync(lockId, ownerTaskNumber, expectedVersion, releasedAt, lockToken, cancellationToken);
 }

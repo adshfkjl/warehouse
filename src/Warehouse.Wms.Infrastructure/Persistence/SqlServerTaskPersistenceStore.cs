@@ -37,6 +37,52 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
         return await db.Tasks.Include(x => x.StateHistory).SingleOrDefaultAsync(x => x.TaskNumber == taskNumber.Trim(), cancellationToken);
     }
 
+    public async Task UpdateWorkflowContextAsync(string taskNumber, string workflowKind, string workflowReference, string snapshotJson, WorkflowRecoveryStatus recoveryStatus = WorkflowRecoveryStatus.Pending, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await db.Tasks.SingleOrDefaultAsync(x => x.TaskNumber == taskNumber.Trim(), cancellationToken)
+            ?? throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+        task.SetWorkflowContext(workflowKind, workflowReference, snapshotJson);
+        if (recoveryStatus == WorkflowRecoveryStatus.BlockedMissingBusinessState) task.MarkWorkflowRecoveryBlocked();
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkWorkflowRecoveryBlockedAsync(string taskNumber, string reason, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await db.Tasks.SingleOrDefaultAsync(x => x.TaskNumber == taskNumber.Trim(), cancellationToken)
+            ?? throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+        task.MarkWorkflowRecoveryBlocked();
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkWorkflowRecoveredAsync(string taskNumber, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await db.Tasks.SingleOrDefaultAsync(x => x.TaskNumber == taskNumber.Trim(), cancellationToken)
+            ?? throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+        task.MarkWorkflowRecovered();
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task UpdateDispatchContextAsync(string taskNumber, string contextJson, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await db.Tasks.SingleOrDefaultAsync(x => x.TaskNumber == taskNumber.Trim(), cancellationToken)
+            ?? throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+        task.SetDispatchContext(contextJson);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<WarehouseTask>> GetTasksByStatesAsync(IReadOnlyCollection<TaskState> states, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(states);
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await db.Tasks.Include(x => x.StateHistory)
+            .Where(x => states.Contains(x.State))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<WarehouseTask> TransitionTaskAsync(string taskNumber, int expectedVersion, TaskState nextState, string operatorName, string reason, string? errorCode = null, DateTimeOffset? occurredAt = null, CancellationToken cancellationToken = default)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);

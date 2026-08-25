@@ -158,4 +158,5 @@ public sealed class InboundOrderTests
         Assert.Equal(0m, order.Lines.Single().ReceivedQuantity);
         Assert.Empty(service.PendingInboundInventory);
     }
+
 }

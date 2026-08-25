@@ -118,6 +118,10 @@ try {
             Invoke-RequiredCommand $dockerCommand @("compose", "-f", "docker-compose.dev.yml", "up", "-d") "docker compose up"
             Wait-ForSqlServer -DockerCommand $dockerCommand
             $env:ConnectionStrings__WmsDb = "Server=127.0.0.1,14333;Database=WmsIntegrationTest;User Id=sa;Password=WmsDevOnly!123;TrustServerCertificate=True"
+            # The API defaults to Production when launched without a profile.
+            # Use the local SQL persistence mode explicitly for the health gate;
+            # production still requires the same explicit setting at deployment.
+            $env:Wms__PersistenceMode = "SqlServer"
             Invoke-RequiredCommand dotnet-ef @("database", "update", "--project", "src/Warehouse.Wms.Infrastructure", "--startup-project", "src/Warehouse.Wms.Api") "dotnet ef database update"
         }
         else {

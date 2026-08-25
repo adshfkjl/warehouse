@@ -49,13 +49,15 @@ public sealed class RelocationService
     private readonly object _gate = new();
     private readonly InventoryService _inventory;
     private readonly WmsTaskScheduler _scheduler;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly Dictionary<string, RelocationResult> _results = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskDispatchRequest> _dispatches = new(StringComparer.Ordinal);
 
-    public RelocationService(InventoryService inventory, WmsTaskScheduler scheduler)
+    public RelocationService(InventoryService inventory, WmsTaskScheduler scheduler, IResourceLockStore? resourceLockStore = null)
     {
         _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
+        _resourceLockStore = resourceLockStore;
     }
 
     public RelocationResult Get(string idempotencyKey)
@@ -112,17 +114,49 @@ public sealed class RelocationService
             ("Location", request.DestinationLocationId.ToString("D")),
             ("Device", deviceId)
         };
-        lock (_gate)
+        if (_resourceLockStore is not null)
         {
-            var activeKeys = _results.Values
-                .SelectMany(item => item.ResourceLocks)
-                .Where(item => item.IsActive(now))
-                .Select(item => item.ResourceKey)
-                .ToHashSet(StringComparer.Ordinal);
-            if (resources.Any(item => activeKeys.Contains(ResourceLock.BuildResourceKey(item.Item1, item.Item2))))
+            var activeLocks = await _resourceLockStore.GetActiveResourceLocksAsync(now, cancellationToken);
+            if (resources.Any(item => activeLocks.Any(existing => existing.ResourceKey == ResourceLock.BuildResourceKey(item.Item1, item.Item2))))
                 throw new InvalidOperationException("One or more relocation resources are already locked.");
         }
-        var locks = resources.Select(item => new ResourceLock(item.Item1, item.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15))).ToArray();
+        else
+        {
+            lock (_gate)
+            {
+                var activeKeys = _results.Values
+                    .SelectMany(item => item.ResourceLocks)
+                    .Where(item => item.IsActive(now))
+                    .Select(item => item.ResourceKey)
+                    .ToHashSet(StringComparer.Ordinal);
+                if (resources.Any(item => activeKeys.Contains(ResourceLock.BuildResourceKey(item.Item1, item.Item2))))
+                    throw new InvalidOperationException("One or more relocation resources are already locked.");
+            }
+        }
+        ResourceLock[] locks;
+        if (_resourceLockStore is not null)
+        {
+            var acquired = new List<ResourceLock>(resources.Length);
+            try
+            {
+                foreach (var resource in resources)
+                {
+                    acquired.Add(await _resourceLockStore.AcquireResourceLockAsync(
+                        resource.Item1, resource.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15), cancellationToken: cancellationToken));
+                }
+
+                locks = acquired.ToArray();
+            }
+            catch
+            {
+                await ReleaseAsync(acquired, order.OrderNumber);
+                throw;
+            }
+        }
+        else
+        {
+            locks = resources.Select(item => new ResourceLock(item.Item1, item.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15))).ToArray();
+        }
         var task = new WarehouseTask(order.OrderNumber, "Relocation");
         var deviceTask = new DeviceTask(key, task.TaskNumber, deviceId,
             request.SourceLocationId.ToString("D"), request.DestinationLocationId.ToString("D"), null,
@@ -154,8 +188,7 @@ public sealed class RelocationService
         }
         catch
         {
-            foreach (var resourceLock in locks.Where(item => item.IsActive()))
-                resourceLock.Release(order.OrderNumber, resourceLock.Version, DateTimeOffset.UtcNow, resourceLock.LockToken);
+            await ReleaseAsync(locks, order.OrderNumber);
             throw;
         }
     }
@@ -207,7 +240,7 @@ public sealed class RelocationService
             new InventoryOperationContext($"relocation:{key}:move", current.Order.OrderNumber, current.Task.TaskNumber, "relocation", "设备确认移库"),
             cancellationToken);
         current.Order.TransitionTo(RelocationState.Completed);
-        Release(current.ResourceLocks, current.Order.OrderNumber);
+        await ReleaseAsync(current.ResourceLocks, current.Order.OrderNumber);
         return Store(current with { Status = RelocationStatus.Completed, InventoryTransaction = transaction });
     }
 
@@ -217,10 +250,20 @@ public sealed class RelocationService
         return result;
     }
 
-    private static void Release(IReadOnlyList<ResourceLock> locks, string owner)
+    private async Task ReleaseAsync(IReadOnlyList<ResourceLock> locks, string owner)
     {
+        var now = DateTimeOffset.UtcNow;
         foreach (var resourceLock in locks.Where(item => item.IsActive()))
-            resourceLock.Release(owner, resourceLock.Version, DateTimeOffset.UtcNow, resourceLock.LockToken);
+        {
+            if (_resourceLockStore is not null)
+            {
+                await _resourceLockStore.ReleaseResourceLockAsync(resourceLock.Id, owner, resourceLock.Version, now, resourceLock.LockToken);
+            }
+            else
+            {
+                resourceLock.Release(owner, resourceLock.Version, now, resourceLock.LockToken);
+            }
+        }
     }
 
     private static void ValidateRequest(RelocationRequest request)

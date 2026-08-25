@@ -4,6 +4,7 @@ using Warehouse.Wms.Domain.Stocktaking;
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.Application.Tasks;
 using Warehouse.Wms.Domain.Devices;
+using Warehouse.Wms.Domain.MasterData;
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 using Warehouse.Wms.Domain.Tasks;
 
@@ -11,6 +12,27 @@ namespace Warehouse.Wms.UnitTests.Stocktaking;
 
 public sealed class StocktakingRangeTests
 {
+    [Fact]
+    public async Task Complete_releases_persistent_loading_point_lock()
+    {
+        var material = Guid.NewGuid();
+        var pallet = Guid.NewGuid();
+        var location = new Location(Guid.NewGuid(), "A-01", 1, 100m, 1000m, 1000m, 1000m);
+        var point = new LoadingPoint("LP-LOCK", "盘点口");
+        var store = new InMemoryTaskPersistenceStore();
+        var scheduler = new WmsTaskScheduler(new ScenarioGateway());
+        var service = new StocktakingService([
+            new StocktakingInventoryItem("A-01", "A", "M-01", null, "P-01", material, pallet, 1m, 1m, InventoryStatus.Available)
+        ], scheduler, store);
+        var task = service.Create(new StocktakingRequest("ST-LOCK"));
+        service.Start(task.TaskNumber);
+        await service.QueueDeviceTaskAsync(task.TaskNumber, task.Items.Single().Id, "PLC-01", point.Code);
+
+        Assert.NotEmpty(await store.GetActiveResourceLocksAsync());
+        service.RecordCount(task.TaskNumber, task.Items.Single().Id, 1m, 1m, point.Code);
+        service.Complete(task.TaskNumber);
+        Assert.Empty(await store.GetActiveResourceLocksAsync());
+    }
     [Fact]
     public void Supports_full_zone_material_batch_and_pallet_filters_with_deterministic_order()
     {

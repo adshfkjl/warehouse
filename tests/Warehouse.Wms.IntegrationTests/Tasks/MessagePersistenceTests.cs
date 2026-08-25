@@ -102,7 +102,24 @@ public sealed class MessagePersistenceTests
     }
 
     private static TestDbContextFactory CreateFactory(string connectionString)
-        => new(new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(connectionString).Options);
+    {
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connectionString)
+        {
+            InitialCatalog = $"WmsMessages_{Guid.NewGuid():N}"
+        };
+        var master = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connectionString)
+        {
+            InitialCatalog = "master"
+        };
+        using (var connection = new Microsoft.Data.SqlClient.SqlConnection(master.ConnectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"IF DB_ID(N'{builder.InitialCatalog}') IS NULL CREATE DATABASE [{builder.InitialCatalog}]";
+            command.ExecuteNonQuery();
+        }
+        return new(new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options);
+    }
 
     private sealed class SqlServerFactAttribute : FactAttribute
     {

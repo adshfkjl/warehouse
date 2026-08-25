@@ -35,6 +35,7 @@ public sealed class OutboundTaskService
 {
     private readonly object _gate = new();
     private readonly WmsTaskScheduler _scheduler;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly IReadOnlyList<OutboundLoadingPoint> _loadingPoints;
     private readonly Dictionary<string, OutboundTaskResult> _tasks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskDispatchRequest> _dispatchRequests = new(StringComparer.Ordinal);
@@ -42,11 +43,13 @@ public sealed class OutboundTaskService
     public OutboundTaskService(
         OutboundAllocationService allocations,
         WmsTaskScheduler scheduler,
-        IEnumerable<OutboundLoadingPoint> loadingPoints)
+        IEnumerable<OutboundLoadingPoint> loadingPoints,
+        IResourceLockStore? resourceLockStore = null)
     {
         _ = allocations ?? throw new ArgumentNullException(nameof(allocations));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _loadingPoints = loadingPoints?.ToArray() ?? throw new ArgumentNullException(nameof(loadingPoints));
+        _resourceLockStore = resourceLockStore;
     }
 
     public OutboundTaskResult Get(string taskNumber)
@@ -95,7 +98,10 @@ public sealed class OutboundTaskService
             loadingPoint.LoadingPoint.Code,
             Require(request.ProtocolVersion, nameof(request.ProtocolVersion)));
         var dispatchRequest = new TaskDispatchRequest(task, deviceTask, DeviceOperationKind.Outbound, request.Priority, request.MaxAttempts);
-        var loadingLock = new ResourceLock("LoadingPoint", loadingPoint.LoadingPoint.Id.ToString("D"), taskNumber, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(15));
+        var now = DateTimeOffset.UtcNow;
+        ResourceLock loadingLock = _resourceLockStore is null
+            ? new ResourceLock("LoadingPoint", loadingPoint.LoadingPoint.Id.ToString("D"), taskNumber, now, TimeSpan.FromMinutes(15))
+            : await _resourceLockStore.AcquireResourceLockAsync("LoadingPoint", loadingPoint.LoadingPoint.Id.ToString("D"), taskNumber, now, TimeSpan.FromMinutes(15), cancellationToken: cancellationToken);
         var locks = allocation.ResourceLocks.Concat([loadingLock]).ToArray();
         try
         {
@@ -128,7 +134,10 @@ public sealed class OutboundTaskService
         }
         catch
         {
-            loadingLock.Release(taskNumber, loadingLock.Version, DateTimeOffset.UtcNow, loadingLock.LockToken);
+            if (_resourceLockStore is null)
+                loadingLock.Release(taskNumber, loadingLock.Version, DateTimeOffset.UtcNow, loadingLock.LockToken);
+            else if (loadingLock.IsActive())
+                await _resourceLockStore.ReleaseResourceLockAsync(loadingLock.Id, taskNumber, loadingLock.Version, DateTimeOffset.UtcNow, loadingLock.LockToken, CancellationToken.None);
             throw;
         }
     }
@@ -153,19 +162,31 @@ public sealed class OutboundTaskService
         return Get(taskNumber);
     }
 
-    public static void ReleaseLoadingPoint(OutboundTaskResult result)
+    public async Task ReleaseLoadingPointAsync(OutboundTaskResult result)
     {
         var loadingLock = result.ResourceLocks.FirstOrDefault(item => item.ResourceType == "LoadingPoint");
         if (loadingLock is not null && loadingLock.IsActive())
-            loadingLock.Release(result.Task.TaskNumber, loadingLock.Version, DateTimeOffset.UtcNow, loadingLock.LockToken);
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (_resourceLockStore is null)
+                loadingLock.Release(result.Task.TaskNumber, loadingLock.Version, now, loadingLock.LockToken);
+            else
+                await _resourceLockStore.ReleaseResourceLockAsync(loadingLock.Id, result.Task.TaskNumber, loadingLock.Version, now, loadingLock.LockToken);
+        }
     }
 
-    public static void ReleaseAllocationResources(OutboundTaskResult result)
+    public async Task ReleaseAllocationResourcesAsync(OutboundTaskResult result)
     {
         foreach (var resourceLock in result.Allocation.ResourceLocks)
         {
             if (resourceLock.IsActive())
-                resourceLock.Release(result.Allocation.Order.OrderNumber, resourceLock.Version, DateTimeOffset.UtcNow, resourceLock.LockToken);
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (_resourceLockStore is null)
+                    resourceLock.Release(result.Allocation.Order.OrderNumber, resourceLock.Version, now, resourceLock.LockToken);
+                else
+                    await _resourceLockStore.ReleaseResourceLockAsync(resourceLock.Id, result.Allocation.Order.OrderNumber, resourceLock.Version, now, resourceLock.LockToken);
+            }
         }
     }
 

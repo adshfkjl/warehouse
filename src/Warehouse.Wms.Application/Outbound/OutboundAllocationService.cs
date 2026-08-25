@@ -2,6 +2,7 @@ using Warehouse.Wms.Application.Inventory;
 using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.Outbound;
 using Warehouse.Wms.Domain.Tasks;
+using Warehouse.Wms.Application.Tasks;
 
 namespace Warehouse.Wms.Application.Outbound;
 
@@ -12,11 +13,16 @@ public sealed class OutboundAllocationService
 {
     private readonly object _gate = new();
     private readonly InventoryService _inventory;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly Dictionary<string, OutboundOrder> _orders = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OutboundAllocation> _allocations = new(StringComparer.Ordinal);
     private readonly List<ResourceLock> _locks = [];
 
-    public OutboundAllocationService(InventoryService inventory) => _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
+    public OutboundAllocationService(InventoryService inventory, IResourceLockStore? resourceLockStore = null)
+    {
+        _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
+        _resourceLockStore = resourceLockStore;
+    }
     public IReadOnlyCollection<OutboundOrder> Orders { get { lock (_gate) return _orders.Values.ToArray(); } }
 
     public OutboundOrder Create(string orderNumber, IEnumerable<OutboundLine>? lines = null)
@@ -59,10 +65,38 @@ public sealed class OutboundAllocationService
                 ("Pallet", source.PalletId?.ToString("D") ?? source.Key),
                 ("Location", source.LocationId?.ToString("D") ?? source.Key)
             };
-            if (resourceKeys.Any(item => _locks.Any(existingLock => existingLock.IsActive(now) && existingLock.ResourceKey == ResourceLock.BuildResourceKey(item.Item1, item.Item2))))
-                throw new InvalidOperationException("Inventory, pallet or location is already locked.");
-            var locks = resourceKeys.Select(item => new ResourceLock(item.Item1, item.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15))).ToArray();
-            _locks.AddRange(locks);
+            ResourceLock[] locks;
+            if (_resourceLockStore is not null)
+            {
+                var acquired = new List<ResourceLock>(resourceKeys.Length);
+                try
+                {
+                    foreach (var resource in resourceKeys)
+                    {
+                        acquired.Add(_resourceLockStore.AcquireResourceLockAsync(
+                            resource.Item1, resource.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15)).GetAwaiter().GetResult());
+                    }
+
+                    locks = acquired.ToArray();
+                }
+                catch
+                {
+                    foreach (var resourceLock in acquired.Where(item => item.IsActive()))
+                    {
+                        _resourceLockStore.ReleaseResourceLockAsync(
+                            resourceLock.Id, order.OrderNumber, resourceLock.Version, now, resourceLock.LockToken).GetAwaiter().GetResult();
+                    }
+
+                    throw;
+                }
+            }
+            else
+            {
+                if (resourceKeys.Any(item => _locks.Any(existingLock => existingLock.IsActive(now) && existingLock.ResourceKey == ResourceLock.BuildResourceKey(item.Item1, item.Item2))))
+                    throw new InvalidOperationException("Inventory, pallet or location is already locked.");
+                locks = resourceKeys.Select(item => new ResourceLock(item.Item1, item.Item2, order.OrderNumber, now, TimeSpan.FromMinutes(15))).ToArray();
+                _locks.AddRange(locks);
+            }
             order.TransitionTo(OutboundState.Allocated);
             order.TransitionTo(OutboundState.Locked);
             var allocation = new OutboundAllocation(order, line, source, request.Quantity, locks);

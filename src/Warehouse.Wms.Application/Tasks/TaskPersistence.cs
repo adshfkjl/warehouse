@@ -10,6 +10,11 @@ public interface ITaskPersistenceStore
 {
     Task<TaskCreateResult> CreateTaskAsync(WarehouseTask task, CancellationToken cancellationToken = default);
     Task<WarehouseTask?> GetTaskAsync(string taskNumber, CancellationToken cancellationToken = default);
+    Task UpdateWorkflowContextAsync(string taskNumber, string workflowKind, string workflowReference, string snapshotJson, WorkflowRecoveryStatus recoveryStatus = WorkflowRecoveryStatus.Pending, CancellationToken cancellationToken = default);
+    Task MarkWorkflowRecoveryBlockedAsync(string taskNumber, string reason, CancellationToken cancellationToken = default);
+    Task MarkWorkflowRecoveredAsync(string taskNumber, CancellationToken cancellationToken = default);
+    Task UpdateDispatchContextAsync(string taskNumber, string contextJson, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<WarehouseTask>> GetTasksByStatesAsync(IReadOnlyCollection<TaskState> states, CancellationToken cancellationToken = default);
     Task<WarehouseTask> TransitionTaskAsync(string taskNumber, int expectedVersion, TaskState nextState, string operatorName, string reason, string? errorCode = null, DateTimeOffset? occurredAt = null, CancellationToken cancellationToken = default);
     Task<TaskIdempotencyRegistrationResult> RegisterIdempotencyKeyAsync(TaskIdempotencyKey key, CancellationToken cancellationToken = default);
     Task<TaskIdempotencyKey?> GetIdempotencyKeyAsync(string scope, string key, CancellationToken cancellationToken = default);
@@ -58,6 +63,62 @@ public sealed class InMemoryTaskPersistenceStore : ITaskPersistenceStore, IResou
         {
             _tasks.TryGetValue(taskNumber.Trim(), out var task);
             return Task.FromResult(task);
+        }
+    }
+
+    public Task UpdateWorkflowContextAsync(string taskNumber, string workflowKind, string workflowReference, string snapshotJson, WorkflowRecoveryStatus recoveryStatus = WorkflowRecoveryStatus.Pending, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_tasks.TryGetValue(taskNumber.Trim(), out var task)) throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+            task.SetWorkflowContext(workflowKind, workflowReference, snapshotJson);
+            if (recoveryStatus == WorkflowRecoveryStatus.BlockedMissingBusinessState) task.MarkWorkflowRecoveryBlocked();
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task MarkWorkflowRecoveryBlockedAsync(string taskNumber, string reason, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_tasks.TryGetValue(taskNumber.Trim(), out var task)) throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+            task.MarkWorkflowRecoveryBlocked();
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task MarkWorkflowRecoveredAsync(string taskNumber, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_tasks.TryGetValue(taskNumber.Trim(), out var task)) throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+            task.MarkWorkflowRecovered();
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task UpdateDispatchContextAsync(string taskNumber, string contextJson, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_tasks.TryGetValue(taskNumber.Trim(), out var task)) throw new KeyNotFoundException($"Task '{taskNumber}' was not found.");
+            task.SetDispatchContext(contextJson);
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<IReadOnlyList<WarehouseTask>> GetTasksByStatesAsync(IReadOnlyCollection<TaskState> states, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(states);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            var snapshot = _tasks.Values.Where(task => states.Contains(task.State)).ToArray();
+            return Task.FromResult<IReadOnlyList<WarehouseTask>>(snapshot);
         }
     }
 

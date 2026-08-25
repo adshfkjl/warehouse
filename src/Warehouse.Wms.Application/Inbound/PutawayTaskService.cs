@@ -38,6 +38,7 @@ public sealed class PutawayTaskService
     private readonly InboundOrderService _inboundOrders;
     private readonly PutawayAllocationService _allocationService;
     private readonly WmsTaskScheduler _scheduler;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly Dictionary<string, PutawayTaskResult> _byIdempotencyKey = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PutawayTaskResult> _byTaskNumber = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _requestFingerprints = new(StringComparer.Ordinal);
@@ -46,11 +47,13 @@ public sealed class PutawayTaskService
     public PutawayTaskService(
         InboundOrderService inboundOrders,
         PutawayAllocationService allocationService,
-        WmsTaskScheduler scheduler)
+        WmsTaskScheduler scheduler,
+        IResourceLockStore? resourceLockStore = null)
     {
         _inboundOrders = inboundOrders ?? throw new ArgumentNullException(nameof(inboundOrders));
         _allocationService = allocationService ?? throw new ArgumentNullException(nameof(allocationService));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
+        _resourceLockStore = resourceLockStore;
     }
 
     public IReadOnlyCollection<PutawayTaskResult> Tasks
@@ -125,7 +128,7 @@ public sealed class PutawayTaskService
                     pendingInventory.WeightKg,
                     request.RequestedLocationId));
             var loadingPoint = _allocationService.SelectLoadingPoint(request.LoadingPointId);
-            locks = AcquireLocks(pendingInventory, allocation, loadingPoint, taskNumber);
+            locks = await AcquireLocksAsync(pendingInventory, allocation, loadingPoint, taskNumber, cancellationToken);
             var task = new WarehouseTask(taskNumber, "Putaway");
             var deviceTask = new DeviceTask(
                 idempotencyKey,
@@ -157,7 +160,7 @@ public sealed class PutawayTaskService
         {
             if (locks is not null)
             {
-                ReleaseLocks(locks, taskNumber);
+                await ReleaseLocksAsync(locks, taskNumber);
             }
 
             if (allocation is not null)
@@ -223,11 +226,12 @@ public sealed class PutawayTaskService
         CancellationToken cancellationToken = default)
         => CreateAndQueueAsync(pendingInventory, request, cancellationToken);
 
-    private ResourceLock[] AcquireLocks(
+    private async Task<ResourceLock[]> AcquireLocksAsync(
         PendingInboundInventory pendingInventory,
         PutawayAllocation allocation,
         PutawayLoadingPointCandidate loadingPoint,
-        string taskNumber)
+        string taskNumber,
+        CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var resources = new List<(string Type, string Id)>
@@ -247,6 +251,26 @@ public sealed class PutawayTaskService
         else
         {
             throw new InvalidOperationException("A pallet binding is required before creating a putaway task.");
+        }
+
+        if (_resourceLockStore is not null)
+        {
+            var acquired = new List<ResourceLock>(resources.Count);
+            try
+            {
+                foreach (var resource in resources)
+                {
+                    acquired.Add(await _resourceLockStore.AcquireResourceLockAsync(
+                        resource.Type, resource.Id, taskNumber, now, TimeSpan.FromMinutes(15), cancellationToken: cancellationToken));
+                }
+
+                return acquired.ToArray();
+            }
+            catch
+            {
+                await ReleaseLocksAsync(acquired, taskNumber);
+                throw;
+            }
         }
 
         lock (_gate)
@@ -271,17 +295,27 @@ public sealed class PutawayTaskService
         }
     }
 
-    private void ReleaseLocks(IReadOnlyList<ResourceLock> locks, string taskNumber)
+    private async Task ReleaseLocksAsync(IReadOnlyList<ResourceLock> locks, string taskNumber)
     {
         var now = DateTimeOffset.UtcNow;
-        lock (_gate)
+        if (_resourceLockStore is not null)
         {
             foreach (var resourceLock in locks)
             {
                 if (resourceLock.IsActive(now))
                 {
-                    resourceLock.Release(taskNumber, resourceLock.Version, now, resourceLock.LockToken);
+                    await _resourceLockStore.ReleaseResourceLockAsync(resourceLock.Id, taskNumber, resourceLock.Version, now, resourceLock.LockToken);
                 }
+            }
+
+            return;
+        }
+
+        lock (_gate)
+        {
+            foreach (var resourceLock in locks.Where(item => item.IsActive(now)))
+            {
+                resourceLock.Release(taskNumber, resourceLock.Version, now, resourceLock.LockToken);
             }
         }
     }

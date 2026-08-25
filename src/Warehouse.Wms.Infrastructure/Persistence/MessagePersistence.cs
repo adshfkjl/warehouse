@@ -17,6 +17,18 @@ public interface IOutboxMessageStore
         TimeSpan leaseDuration,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Claims the durable command for one idempotency key. Implementations
+    /// must perform lookup and claim in one short transaction.
+    /// </summary>
+    Task<OutboxMessage?> ClaimAsync(
+        string idempotencyKey,
+        string workerId,
+        DateTimeOffset claimedAt,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("The message store does not support idempotency-key claims.");
+
     Task MarkPublishedAsync(
         Guid messageId,
         string workerId,
@@ -158,6 +170,34 @@ public sealed class SqlServerMessageStore(IDbContextFactory<WarehouseDbContext> 
             .ThenBy(x => x.Id)
             .FirstOrDefaultAsync(cancellationToken);
         if (entity is null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        entity.Claim(workerId, timestamp, leaseDuration);
+        await SaveAndCommitAsync(db, transaction, cancellationToken);
+        return entity;
+    }
+
+    public async Task<OutboxMessage?> ClaimAsync(
+        string idempotencyKey,
+        string workerId,
+        DateTimeOffset claimedAt,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            throw new ArgumentException("A non-empty idempotency key is required.", nameof(idempotencyKey));
+        }
+
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var timestamp = claimedAt.ToUniversalTime();
+        var entity = await db.OutboxMessages
+            .SingleOrDefaultAsync(x => x.IdempotencyKey == idempotencyKey, cancellationToken);
+        if (entity is null || !entity.IsDispatchable(timestamp))
         {
             await transaction.CommitAsync(cancellationToken);
             return null;

@@ -1,5 +1,12 @@
 namespace Warehouse.Wms.Domain.Tasks;
 
+public enum WorkflowRecoveryStatus
+{
+    Pending,
+    RecoveredFromSnapshot,
+    BlockedMissingBusinessState
+}
+
 public sealed class WarehouseTask
 {
     private readonly List<TaskStateHistory> _stateHistory = [];
@@ -22,7 +29,32 @@ public sealed class WarehouseTask
     public int Version { get; private set; } = 1;
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
+    public string? DispatchContextJson { get; private set; }
+    public string? WorkflowKind { get; private set; }
+    public string? WorkflowReference { get; private set; }
+    public string? WorkflowSnapshotJson { get; private set; }
+    public WorkflowRecoveryStatus WorkflowRecoveryStatus { get; private set; } = WorkflowRecoveryStatus.Pending;
     public IReadOnlyList<TaskStateHistory> StateHistory => _stateHistory.AsReadOnly();
+
+    public void SetDispatchContext(string contextJson)
+    {
+        if (string.IsNullOrWhiteSpace(contextJson)) throw new ArgumentException("A dispatch context is required.", nameof(contextJson));
+        DispatchContextJson = contextJson.Trim();
+    }
+
+    public void SetWorkflowContext(string workflowKind, string workflowReference, string snapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(workflowKind)) throw new ArgumentException("A workflow kind is required.", nameof(workflowKind));
+        if (string.IsNullOrWhiteSpace(workflowReference)) throw new ArgumentException("A workflow reference is required.", nameof(workflowReference));
+        if (string.IsNullOrWhiteSpace(snapshotJson)) throw new ArgumentException("A workflow snapshot is required.", nameof(snapshotJson));
+        WorkflowKind = workflowKind.Trim();
+        WorkflowReference = workflowReference.Trim();
+        WorkflowSnapshotJson = snapshotJson.Trim();
+        WorkflowRecoveryStatus = WorkflowRecoveryStatus.Pending;
+    }
+
+    public void MarkWorkflowRecoveryBlocked() => WorkflowRecoveryStatus = WorkflowRecoveryStatus.BlockedMissingBusinessState;
+    public void MarkWorkflowRecovered() => WorkflowRecoveryStatus = WorkflowRecoveryStatus.RecoveredFromSnapshot;
 
     public void TransitionTo(
         TaskState nextState,

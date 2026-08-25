@@ -179,6 +179,231 @@ public sealed class TaskSchedulerTests
     }
 
     [Fact]
+    public async Task Scheduler_persists_enqueue_and_dispatch_state_transitions()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var gateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var scheduler = new WmsTaskScheduler(gateway, persistenceStore: persistence);
+        var request = Request("persisted", "PLC-01");
+
+        await scheduler.EnqueueAsync(request);
+        await scheduler.DispatchNextAsync();
+
+        var restored = await persistence.GetTaskAsync("persisted");
+        Assert.NotNull(restored);
+        Assert.Equal(TaskState.SentToPlc, restored!.State);
+        Assert.Equal(5, restored.Version);
+        Assert.Equal(4, restored.StateHistory.Count);
+    }
+
+    [Fact]
+    public async Task Scheduler_recovery_does_not_resubmit_in_flight_task()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var gateway = new RecoveryGateway(DeviceCapability.TaskQuery, DeviceOperationStatus.Executing);
+        var state = new TaskSchedulerState();
+        var scheduler = new WmsTaskScheduler(gateway, state: state, persistenceStore: persistence);
+        var request = Request("recover-persisted", "PLC-01");
+
+        await scheduler.EnqueueAsync(request);
+        await scheduler.DispatchNextAsync();
+        await scheduler.RecoverInFlightAsync();
+
+        Assert.Equal(1, gateway.SubmissionCount);
+        Assert.Equal(TaskState.Executing, request.Task.State);
+    }
+
+    [Fact]
+    public async Task Scheduler_marks_durable_in_flight_task_unknown_on_restart_without_replay()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("durable-restart", "Putaway");
+        await persistence.CreateTaskAsync(task);
+        await persistence.TransitionTaskAsync(task.TaskNumber, task.Version, TaskState.Allocated, "scheduler", "allocated");
+        await persistence.TransitionTaskAsync(task.TaskNumber, task.Version, TaskState.Queued, "scheduler", "queued");
+        await persistence.TransitionTaskAsync(task.TaskNumber, task.Version, TaskState.Dispatching, "scheduler", "dispatching");
+
+        var gateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var scheduler = new WmsTaskScheduler(gateway, persistenceStore: persistence);
+        await scheduler.RecoverPersistedInFlightAsync();
+
+        var restored = await persistence.GetTaskAsync(task.TaskNumber);
+        Assert.Equal(TaskState.PhysicalStateUnknown, restored!.State);
+        Assert.Empty(gateway.SubmittedTaskNumbers);
+    }
+
+    [Fact]
+    public async Task Scheduler_persists_dispatch_context_for_restart_recovery()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var scheduler = new WmsTaskScheduler(new FakeGateway(DeviceOperationStatus.Accepted), persistenceStore: persistence);
+        var request = Request("context-restart", "PLC-01");
+        await scheduler.EnqueueAsync(request);
+        var restored = await persistence.GetTaskAsync(request.Task.TaskNumber);
+        Assert.NotNull(restored?.DispatchContextJson);
+        Assert.Contains("PLC-01", restored!.DispatchContextJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Scheduler_rebuilds_queued_dispatch_context_after_restart()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var first = new WmsTaskScheduler(new FakeGateway(DeviceOperationStatus.Accepted), persistenceStore: persistence);
+        var request = Request("queued-restart", "PLC-07", priority: 9);
+        request = new TaskDispatchRequest(request.Task, request.DeviceTask, request.OperationKind, priority: 9, maxAttempts: 4);
+
+        await first.EnqueueAsync(request);
+
+        var gateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var restarted = new WmsTaskScheduler(gateway, persistenceStore: persistence);
+        await restarted.RecoverPersistedInFlightAsync();
+        var result = await restarted.DispatchNextAsync();
+
+        Assert.NotNull(result);
+        Assert.Equal("queued-restart", result!.Request.Task.TaskNumber);
+        Assert.Equal(9, result.Request.Priority);
+        Assert.Equal(4, result.Request.MaxAttempts);
+        Assert.Single(gateway.SubmittedTaskNumbers);
+    }
+
+    [Fact]
+    public async Task Scheduler_reconciles_persisted_in_flight_device_task_after_restart()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var firstGateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var first = new WmsTaskScheduler(firstGateway, persistenceStore: persistence);
+        var request = Request("inflight-restart", "PLC-08");
+        await first.EnqueueAsync(request);
+        await first.DispatchNextAsync();
+
+        var secondGateway = new RecoveryGateway(DeviceCapability.TaskQuery, DeviceOperationStatus.Executing);
+        var restarted = new WmsTaskScheduler(secondGateway, persistenceStore: persistence);
+        await restarted.RecoverPersistedInFlightAsync();
+        await restarted.RecoverInFlightAsync();
+
+        var restored = await persistence.GetTaskAsync("inflight-restart");
+        Assert.Equal(TaskState.Executing, restored!.State);
+        Assert.Equal(0, secondGateway.SubmissionCount);
+    }
+
+    [Fact]
+    public async Task Restart_recovery_claims_device_for_persisted_in_flight_task()
+    {
+        var persistence = new InMemoryTaskPersistenceStore();
+        var first = new WmsTaskScheduler(new FakeGateway(DeviceOperationStatus.Accepted), persistenceStore: persistence);
+        await first.EnqueueAsync(Request("active-device", "PLC-A"));
+        await first.DispatchNextAsync();
+
+        var gateway = new RecoveryGateway(DeviceCapability.TaskQuery, DeviceOperationStatus.Executing);
+        var restarted = new WmsTaskScheduler(gateway, persistenceStore: persistence);
+        await restarted.RecoverPersistedInFlightAsync();
+        var queued = Request("same-device-queued", "PLC-A");
+        await restarted.EnqueueAsync(queued);
+
+        Assert.Null(await restarted.DispatchNextAsync());
+    }
+
+    [Fact]
+    public async Task Persistent_device_lease_serializes_two_scheduler_processes()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var firstGateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var secondGateway = new FakeGateway(DeviceOperationStatus.Accepted);
+        var first = new WmsTaskScheduler(firstGateway, persistenceStore: store);
+        var second = new WmsTaskScheduler(secondGateway, persistenceStore: store);
+        await first.EnqueueAsync(Request("lease-1", "PLC-LEASE"));
+        await second.EnqueueAsync(Request("lease-2", "PLC-LEASE"));
+
+        var firstResult = await first.DispatchNextAsync();
+        var secondResult = await second.DispatchNextAsync();
+
+        Assert.NotNull(firstResult);
+        Assert.Null(secondResult);
+        Assert.Single(firstGateway.SubmittedTaskNumbers);
+        Assert.Empty(secondGateway.SubmittedTaskNumbers);
+    }
+
+    [Fact]
+    public async Task Workflow_context_is_persisted_and_recovery_can_be_marked_blocked()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("workflow-context", "Outbound");
+        await store.CreateTaskAsync(task);
+        await store.UpdateWorkflowContextAsync(task.TaskNumber, "OutboundReview", "OB-001", "{\"order\":\"OB-001\"}");
+        await store.UpdateWorkflowContextAsync(task.TaskNumber, "OutboundReview", "OB-001", "{\"order\":\"OB-001\"}", WorkflowRecoveryStatus.BlockedMissingBusinessState);
+
+        var restored = await store.GetTaskAsync(task.TaskNumber);
+        Assert.Equal("OutboundReview", restored!.WorkflowKind);
+        Assert.Equal("OB-001", restored.WorkflowReference);
+        Assert.Equal(WorkflowRecoveryStatus.BlockedMissingBusinessState, restored.WorkflowRecoveryStatus);
+    }
+
+    [Fact]
+    public async Task Workflow_recovery_reports_blocked_instead_of_completing_missing_business_state()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("recover-outbound", "Outbound");
+        task.SetWorkflowContext("OutboundReview", "OB-001", "{bad-json");
+        await store.CreateTaskAsync(task);
+        var recovery = new WorkflowRecoveryService(store);
+
+        var result = await recovery.RecoverAsync("OutboundReview");
+
+        Assert.Single(result);
+        Assert.Equal(WorkflowRecoveryStatus.BlockedMissingBusinessState, result[0].Status);
+        Assert.Equal(WorkflowRecoveryStatus.BlockedMissingBusinessState,
+            (await store.GetTaskAsync(task.TaskNumber))!.WorkflowRecoveryStatus);
+    }
+
+    [Fact]
+    public async Task Workflow_recovery_keeps_scheduler_snapshot_recoverable()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("recoverable-outbound", "Outbound");
+        task.SetWorkflowContext("Outbound", task.TaskNumber, "{\"order\":\"OB-002\"}");
+        task.MarkWorkflowRecovered();
+        await store.CreateTaskAsync(task);
+        var recovery = new WorkflowRecoveryService(store);
+
+        var result = await recovery.RecoverAsync("Outbound");
+
+        Assert.Single(result);
+        Assert.Equal(WorkflowRecoveryStatus.RecoveredFromSnapshot, result[0].Status);
+        Assert.Equal(WorkflowRecoveryStatus.RecoveredFromSnapshot,
+            (await store.GetTaskAsync(task.TaskNumber))!.WorkflowRecoveryStatus);
+    }
+
+    [Fact]
+    public async Task Workflow_recovery_marks_valid_snapshot_recovered()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("recover-valid", "Outbound");
+        task.SetWorkflowContext("OutboundReview", "OB-002", "{\"order\":\"OB-002\"}");
+        await store.CreateTaskAsync(task);
+        var result = await new WorkflowRecoveryService(store).RecoverAsync("OutboundReview");
+        Assert.Equal(WorkflowRecoveryStatus.RecoveredFromSnapshot, result.Single().Status);
+        Assert.Equal(WorkflowRecoveryStatus.RecoveredFromSnapshot, (await store.GetTaskAsync(task.TaskNumber))!.WorkflowRecoveryStatus);
+    }
+
+    [Fact]
+    public async Task Malformed_dispatch_context_is_blocked_and_not_dispatched()
+    {
+        var store = new InMemoryTaskPersistenceStore();
+        var task = new WarehouseTask("bad-context", "Outbound");
+        task.SetDispatchContext("{bad-json");
+        await store.CreateTaskAsync(task);
+        await store.TransitionTaskAsync(task.TaskNumber, task.Version, TaskState.Allocated, "test", "allocated");
+        await store.TransitionTaskAsync(task.TaskNumber, task.Version, TaskState.Queued, "test", "queued");
+
+        var scheduler = new WmsTaskScheduler(new FakeGateway(DeviceOperationStatus.Accepted), persistenceStore: store);
+        await scheduler.RecoverPersistedInFlightAsync();
+
+        var restored = await store.GetTaskAsync(task.TaskNumber);
+        Assert.Equal(WorkflowRecoveryStatus.BlockedMissingBusinessState, restored!.WorkflowRecoveryStatus);
+        Assert.Null(await scheduler.DispatchNextAsync());
+    }
+
+    [Fact]
     public async Task Scheduler_keeps_unknown_command_non_dispatchable_and_never_retries_it()
     {
         var outbox = new RecordingTaskCommandOutbox();
@@ -232,6 +457,24 @@ public sealed class TaskSchedulerTests
 
         public Task<DeviceOperationResult> RequestStopAsync(DeviceTask task, CancellationToken cancellationToken = default) =>
             Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, DeviceOperationStatus.StopConfirmed));
+    }
+
+    private sealed class RecoveryGateway(DeviceCapability capabilities, DeviceOperationStatus status) : IWarehouseDeviceGateway
+    {
+        public int SubmissionCount { get; private set; }
+        public Task<DeviceOperationResult> SubmitInboundAsync(DeviceTask task, CancellationToken cancellationToken = default)
+        {
+            SubmissionCount++;
+            return Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, status, $"device-{task.WmsTaskId}"));
+        }
+        public Task<DeviceOperationResult> SubmitOutboundAsync(DeviceTask task, CancellationToken cancellationToken = default) => SubmitInboundAsync(task, cancellationToken);
+        public Task<DeviceOperationResult> SubmitTransferAsync(DeviceTask task, CancellationToken cancellationToken = default) => SubmitInboundAsync(task, cancellationToken);
+        public Task<DeviceResultObservation?> GetStatusAsync(string deviceTaskNumber, CancellationToken cancellationToken = default) =>
+            Task.FromResult<DeviceResultObservation?>(capabilities.HasFlag(DeviceCapability.TaskQuery)
+                ? new DeviceResultObservation(deviceTaskNumber, 1, status, DeviceObservationSource.Polling, DateTimeOffset.UtcNow)
+                : null);
+        public Task<DeviceOperationResult> TestConnectionAsync(string deviceId, CancellationToken cancellationToken = default) => Task.FromResult(new DeviceOperationResult(deviceId, DeviceOperationStatus.Succeeded));
+        public Task<DeviceOperationResult> RequestStopAsync(DeviceTask task, CancellationToken cancellationToken = default) => Task.FromResult(new DeviceOperationResult(task.IdempotencyKey, DeviceOperationStatus.StopConfirmed));
     }
 
     private sealed class RecordingTaskCommandOutbox : ITaskCommandOutbox

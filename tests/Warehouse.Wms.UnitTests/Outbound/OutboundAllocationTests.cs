@@ -2,6 +2,7 @@ using Warehouse.Wms.Application.Inventory;
 using Warehouse.Wms.Application.Outbound;
 using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.Outbound;
+using Warehouse.Wms.Application.Tasks;
 
 namespace Warehouse.Wms.UnitTests.Outbound;
 
@@ -46,5 +47,24 @@ public sealed class OutboundAllocationTests
         var secondOrder = service.Create("OB-003");
         var secondLine = secondOrder.AddLine(new OutboundLine(material, 1m));
         Assert.Throws<InvalidOperationException>(() => service.Allocate(new OutboundAllocationRequest("alloc-003", secondOrder.OrderNumber, secondLine.Id, 1m)));
+    }
+
+    [Fact]
+    public async Task Uses_persistent_resource_lock_store_when_configured()
+    {
+        var material = Guid.NewGuid();
+        var pallet = Guid.NewGuid();
+        var location = Guid.NewGuid();
+        var inventory = new InventoryService();
+        await inventory.IncreaseAsync(material, pallet, location, null, 2m, 2m, new InventoryOperationContext("seed-persistent"));
+        var store = new InMemoryTaskPersistenceStore();
+        var service = new OutboundAllocationService(inventory, store);
+        var order = service.Create("OB-PERSIST");
+        var line = order.AddLine(new OutboundLine(material, 1m));
+
+        var allocation = service.Allocate(new OutboundAllocationRequest("alloc-persist", order.OrderNumber, line.Id, 1m));
+
+        var active = await store.GetActiveResourceLocksAsync();
+        Assert.Equal(allocation.ResourceLocks.Select(lockRecord => lockRecord.Id).OrderBy(id => id), active.Select(lockRecord => lockRecord.Id).OrderBy(id => id));
     }
 }

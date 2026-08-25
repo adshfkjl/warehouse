@@ -3,6 +3,7 @@ using Warehouse.Wms.Domain.Devices;
 using Warehouse.Wms.Domain.Inbound;
 using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.Tasks;
+using Warehouse.Wms.Application.Tasks;
 
 namespace Warehouse.Wms.Application.Inbound;
 
@@ -30,17 +31,20 @@ public sealed class InboundReconciliationService
     private readonly InboundOrderService _inboundOrders;
     private readonly PutawayTaskService _putawayTasks;
     private readonly InventoryService _inventory;
+    private readonly IResourceLockStore? _resourceLockStore;
     private readonly Dictionary<string, PutawayReconciliationResult> _results = new(StringComparer.Ordinal);
     private readonly HashSet<Guid> _completedPendingInventory = [];
 
     public InboundReconciliationService(
         InboundOrderService inboundOrders,
         PutawayTaskService putawayTasks,
-        InventoryService inventory)
+        InventoryService inventory,
+        IResourceLockStore? resourceLockStore = null)
     {
         _inboundOrders = inboundOrders ?? throw new ArgumentNullException(nameof(inboundOrders));
         _putawayTasks = putawayTasks ?? throw new ArgumentNullException(nameof(putawayTasks));
         _inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
+        _resourceLockStore = resourceLockStore;
     }
 
     public Task<PutawayReconciliationResult> CompleteAsync(
@@ -131,7 +135,7 @@ public sealed class InboundReconciliationService
             cancellationToken);
 
         lock (_gate) _completedPendingInventory.Add(pending.Id);
-        ReleaseLocks(taskResult.ResourceLocks, normalizedTaskNumber);
+        await ReleaseLocksAsync(taskResult.ResourceLocks, normalizedTaskNumber, cancellationToken);
         TryCompleteOrder(pending.OrderNumber);
         var completed = new PutawayReconciliationResult(
             normalizedTaskNumber,
@@ -141,17 +145,20 @@ public sealed class InboundReconciliationService
         return completed;
     }
 
-    private void ReleaseLocks(IReadOnlyList<ResourceLock> locks, string taskNumber)
+    private async Task ReleaseLocksAsync(IReadOnlyList<ResourceLock> locks, string taskNumber, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var resourceLock in locks)
         {
+            if (!resourceLock.IsActive(now)) continue;
+            if (_resourceLockStore is not null)
+            {
+                await _resourceLockStore.ReleaseResourceLockAsync(resourceLock.Id, taskNumber, resourceLock.Version, now, resourceLock.LockToken, cancellationToken);
+                continue;
+            }
             lock (_gate)
             {
-                if (resourceLock.IsActive(now))
-                {
-                    resourceLock.Release(taskNumber, resourceLock.Version, now, resourceLock.LockToken);
-                }
+                if (resourceLock.IsActive(now)) resourceLock.Release(taskNumber, resourceLock.Version, now, resourceLock.LockToken);
             }
         }
     }
