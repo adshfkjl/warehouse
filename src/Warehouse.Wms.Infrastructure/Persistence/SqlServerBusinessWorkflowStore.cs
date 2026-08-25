@@ -7,6 +7,7 @@ namespace Warehouse.Wms.Infrastructure.Persistence;
 
 public sealed class SqlServerBusinessWorkflowStore(IDbContextFactory<WarehouseDbContext> dbContextFactory) : IBusinessWorkflowStore
 {
+    private const int MaxTransientAttempts = 3;
     public async Task<BusinessWorkflowSnapshot?> GetAsync(string aggregateType, string aggregateKey, CancellationToken cancellationToken = default)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -47,7 +48,7 @@ public sealed class SqlServerBusinessWorkflowStore(IDbContextFactory<WarehouseDb
                 await SaveOnceAsync(snapshot, expectedVersion, reason, operatorId, cancellationToken);
                 return;
             }
-            catch (Exception exception) when (attempt < 3 && IsTransientConcurrency(exception))
+            catch (Exception exception) when (attempt < MaxTransientAttempts && IsTransientConcurrency(exception))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
             }
@@ -102,26 +103,36 @@ public sealed class SqlServerBusinessWorkflowStore(IDbContextFactory<WarehouseDb
         var normalizedScope = Require(scope, nameof(scope));
         var normalizedKey = Require(key, nameof(key));
         var normalizedHash = Require(requestHash, nameof(requestHash));
-        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-        var existing = await db.BusinessWorkflowIdempotency.SingleOrDefaultAsync(x => x.Scope == normalizedScope && x.Key == normalizedKey, cancellationToken);
-        if (existing is not null)
+        for (var attempt = 1; ; attempt++)
         {
-            if (!string.Equals(existing.RequestHash, normalizedHash, StringComparison.Ordinal))
-                throw new InvalidOperationException($"Idempotency key '{normalizedScope}:{normalizedKey}' was reused with a different request.");
-            await transaction.CommitAsync(cancellationToken);
-            return new BusinessWorkflowIdempotencyResult(ToIdempotency(existing), true);
-        }
+            try
+            {
+                await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+                var existing = await db.BusinessWorkflowIdempotency.SingleOrDefaultAsync(x => x.Scope == normalizedScope && x.Key == normalizedKey, cancellationToken);
+                if (existing is not null)
+                {
+                    if (!string.Equals(existing.RequestHash, normalizedHash, StringComparison.Ordinal))
+                        throw new InvalidOperationException($"Idempotency key '{normalizedScope}:{normalizedKey}' was reused with a different request.");
+                    await transaction.CommitAsync(cancellationToken);
+                    return new BusinessWorkflowIdempotencyResult(ToIdempotency(existing), true);
+                }
 
-        var entry = new BusinessWorkflowIdempotencyEntity
-        {
-            Id = Guid.NewGuid(), Scope = normalizedScope, Key = normalizedKey, RequestHash = normalizedHash,
-            AggregateType = Normalize(aggregateType), AggregateKey = Normalize(aggregateKey), CreatedAt = DateTimeOffset.UtcNow
-        };
-        db.BusinessWorkflowIdempotency.Add(entry);
-        await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return new BusinessWorkflowIdempotencyResult(ToIdempotency(entry), false);
+                var entry = new BusinessWorkflowIdempotencyEntity
+                {
+                    Id = Guid.NewGuid(), Scope = normalizedScope, Key = normalizedKey, RequestHash = normalizedHash,
+                    AggregateType = Normalize(aggregateType), AggregateKey = Normalize(aggregateKey), CreatedAt = DateTimeOffset.UtcNow
+                };
+                db.BusinessWorkflowIdempotency.Add(entry);
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new BusinessWorkflowIdempotencyResult(ToIdempotency(entry), false);
+            }
+            catch (Exception exception) when (attempt < MaxTransientAttempts && IsTransientConcurrency(exception))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
+            }
+        }
     }
 
     public async Task<BusinessWorkflowIdempotency?> GetIdempotencyAsync(string scope, string key, CancellationToken cancellationToken = default)

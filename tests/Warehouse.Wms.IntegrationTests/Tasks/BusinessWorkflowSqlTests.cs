@@ -85,6 +85,41 @@ public sealed class BusinessWorkflowSqlTests
         Assert.Equal(1, attempts.Count(result => !result));
     }
 
+    [SqlServerFact]
+    public async Task Sql_concurrent_idempotency_registration_replays_one_entry_and_rejects_hash_conflict()
+    {
+        var configured = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configured) { InitialCatalog = $"WmsIdempotencyConcurrency_{Guid.NewGuid():N}" };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options;
+        await using var factory = new TestDbContextFactory(options);
+        await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+
+        var attempts = await Task.WhenAll(
+            RegisterAsync(new SqlServerBusinessWorkflowStore(factory), "same-hash"),
+            RegisterAsync(new SqlServerBusinessWorkflowStore(factory), "same-hash"));
+
+        Assert.Equal(1, attempts.Count(result => !result.Replayed));
+        Assert.Equal(1, attempts.Count(result => result.Replayed));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new SqlServerBusinessWorkflowStore(factory).RegisterIdempotencyAsync("scope", "key", "different-hash"));
+    }
+
+    [SqlServerFact]
+    public async Task Sql_save_cancellation_is_propagated_before_opening_transaction()
+    {
+        var configured = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configured) { InitialCatalog = $"WmsCancellation_{Guid.NewGuid():N}" };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options;
+        await using var factory = new TestDbContextFactory(options);
+        await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new SqlServerBusinessWorkflowStore(factory).SaveAsync(
+                new BusinessWorkflowSnapshot("Relocation", "REL-CANCEL", 1, "Queued", "{}", DateTimeOffset.UtcNow), 0, cancellationToken: cancellation.Token));
+    }
+
     private static async Task<bool> TrySaveAsync(SqlServerBusinessWorkflowStore store, BusinessWorkflowSnapshot snapshot)
     {
         try
@@ -97,6 +132,9 @@ public sealed class BusinessWorkflowSqlTests
             return false;
         }
     }
+
+    private static Task<BusinessWorkflowIdempotencyResult> RegisterAsync(SqlServerBusinessWorkflowStore store, string hash)
+        => store.RegisterIdempotencyAsync("scope", "key", hash);
 
     private sealed class SqlServerFactAttribute : FactAttribute
     {

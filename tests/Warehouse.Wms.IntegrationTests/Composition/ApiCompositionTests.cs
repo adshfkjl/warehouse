@@ -97,7 +97,7 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
 
     private static string TestSqlConnection()
         => Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")
-            ?? "Server=127.0.0.1,14333;Database=WmsCompositionTest;User Id=sa;Password=WmsDevOnly!123;TrustServerCertificate=True;Encrypt=False";
+            ?? throw new InvalidOperationException("WMS_SQLSERVER_TEST_CONNECTION is required for SQL Server composition tests.");
 
     private sealed class SqlServerFactAttribute : FactAttribute
     {
