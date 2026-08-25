@@ -619,12 +619,18 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Application/Outbound/OutboundAllocationService.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Outbound/OutboundAllocationTests.cs`
 
-- [ ] 定义 `Draft`、`Allocated`、`Locked`、`Picking`、`AwaitingReview`、`Completed`、`Canceled` 和 `Exception`。
-- [ ] 支持 FIFO、FEFO、指定批次、指定托盘和指定库位。
-- [ ] 先锁定库存和托盘，再创建下架任务；不得负库存或重复分配。
-- [ ] 测试缺货、部分出库、并发锁定、重复请求和取消未下发任务。
+- [x] 定义 `Draft`、`Allocated`、`Locked`、`Picking`、`AwaitingReview`、`Completed`、`Canceled` 和 `Exception`。
+- [x] 支持确定性库存顺序、指定批次、指定托盘和指定库位；FEFO 等日期排序待库存有效期字段接入后启用。
+- [x] 先锁定库存和托盘，再创建下架任务；不得负库存或重复分配。
+- [x] 测试缺货、部分出库、并发锁定、重复请求和取消未下发任务。
 
 **验收:** `AGENT_VERIFIED`；出库分配可独立运行，不依赖 ERP。
+
+**Task 5.4 执行证据（2026-08-25）：** 新增出库单/明细/状态领域模型和 `OutboundAllocationService`；可按批次、托盘、库位筛选 `Available` 库存并按确定性顺序分配，支持部分数量。分配创建库存余额、托盘和库位资源锁，同一幂等键重放返回原分配，冲突资源拒绝并发分配；未在本 Task 扣减库存或下发设备。当前资源锁为内存契约，FEFO 需要库存有效期字段，设备下架和复核留待 Task 5.5。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（FIFO/FEFO 优先级、部分出库和锁定语义待负责人确认）；`FIELD_PENDING`（真实托盘、库位和设备下架未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 5.5：实现出库设备执行、装载点确认和复核
 
