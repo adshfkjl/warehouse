@@ -85,6 +85,23 @@ public sealed class PutawayAllocationService
         get { lock (_gate) return _allocations.Values.ToArray(); }
     }
 
+    public void Restore(PutawayAllocation allocation)
+    {
+        ArgumentNullException.ThrowIfNull(allocation);
+        lock (_gate)
+        {
+            if (_allocations.TryGetValue(allocation.PendingInboundInventoryId, out var existing))
+            {
+                if (existing != allocation) throw new InvalidOperationException($"Pending inbound allocation '{allocation.PendingInboundInventoryId}' conflicts with the restored allocation.");
+                return;
+            }
+            if (_allocations.Values.Any(item => item.LocationId == allocation.LocationId))
+                throw new InvalidOperationException($"Location '{allocation.LocationCode}' is already reserved for putaway.");
+            _allocations[allocation.PendingInboundInventoryId] = allocation;
+            _requestFingerprints[allocation.PendingInboundInventoryId] = $"restored:{allocation.LocationId:D}:{allocation.AllocatedAt:O}";
+        }
+    }
+
     public PutawayAllocation? Get(Guid pendingInboundInventoryId)
     {
         lock (_gate)

@@ -27,6 +27,7 @@ public static class InventoryPersistenceServiceCollectionExtensions
         services.AddSingleton<SqlServerTaskPersistenceStore>();
         services.AddSingleton<ITaskPersistenceStore>(sp => sp.GetRequiredService<SqlServerTaskPersistenceStore>());
         services.AddSingleton<IResourceLockStore>(sp => sp.GetRequiredService<SqlServerTaskPersistenceStore>());
+        services.AddSingleton<IBusinessWorkflowStore, SqlServerBusinessWorkflowStore>();
         services.AddSingleton<IIntegrationOutbox, SqlServerIntegrationOutbox>();
         return services;
     }

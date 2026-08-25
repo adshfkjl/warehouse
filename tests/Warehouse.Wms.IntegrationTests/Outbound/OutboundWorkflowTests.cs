@@ -116,7 +116,68 @@ public sealed class OutboundWorkflowTests
         Assert.Empty(await store.GetActiveResourceLocksAsync());
     }
 
-    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false, IResourceLockStore? resourceLockStore = null)
+    [Fact]
+    public async Task Review_result_is_restored_from_business_store_without_second_inventory_decrease()
+    {
+        var workflowStore = new InMemoryBusinessWorkflowStore();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, workflowStore: workflowStore);
+        var allocation = fixture.Allocate("outbound-business-persist");
+        var submitted = await fixture.Tasks.SubmitAsync(allocation, new OutboundTaskRequest("outbound-business-persist", "PLC-01", fixture.LoadingPoint.Id));
+        await fixture.Review.ProcessDeviceResultAsync(submitted.Task.TaskNumber, DeviceOperationStatus.Succeeded);
+        var request = new OutboundReviewRequest(fixture.PalletId.ToString("D"), 10m, true);
+        var completed = await fixture.Review.ReviewAsync(submitted.Task.TaskNumber, request);
+
+        var restartedAllocations = new OutboundAllocationService(fixture.Inventory);
+        var restartedScheduler = new WmsTaskScheduler(new ScenarioGateway(DeviceOperationStatus.Accepted));
+        var restartedTasks = new OutboundTaskService(restartedAllocations, restartedScheduler, [new OutboundLoadingPoint(fixture.LoadingPoint, false)], null, workflowStore.CreateRestartedInstance());
+        await restartedTasks.RestoreAsync();
+        var restartedReview = new OutboundReviewService(restartedTasks, fixture.Inventory, workflowStore.CreateRestartedInstance());
+        await restartedReview.RestoreAsync();
+        var replay = await restartedReview.ReviewAsync(submitted.Task.TaskNumber, request);
+
+        Assert.Equal(OutboundReviewStatus.Completed, completed.Status);
+        Assert.Equal(OutboundReviewStatus.AlreadyCompleted, replay.Status);
+        Assert.Single(fixture.Inventory.GetTransactions().Where(item => item.Type == InventoryTransactionType.Decrease));
+    }
+
+    [Fact]
+    public async Task Awaiting_review_task_can_complete_after_fresh_service_restore()
+    {
+        var workflowStore = new InMemoryBusinessWorkflowStore();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, workflowStore: workflowStore);
+        var allocation = fixture.Allocate("outbound-awaiting-restart");
+        var submitted = await fixture.Tasks.SubmitAsync(allocation, new OutboundTaskRequest("outbound-awaiting-restart", "PLC-01", fixture.LoadingPoint.Id));
+        await fixture.Review.ProcessDeviceResultAsync(submitted.Task.TaskNumber, DeviceOperationStatus.Succeeded);
+
+        var restartedAllocations = new OutboundAllocationService(fixture.Inventory);
+        var restartedTasks = new OutboundTaskService(restartedAllocations, new WmsTaskScheduler(new ScenarioGateway(DeviceOperationStatus.Accepted)), [new OutboundLoadingPoint(fixture.LoadingPoint, false)], null, workflowStore.CreateRestartedInstance());
+        await restartedTasks.RestoreAsync();
+        var restartedReview = new OutboundReviewService(restartedTasks, fixture.Inventory, workflowStore.CreateRestartedInstance());
+        await restartedReview.RestoreAsync();
+        var replayedDevice = await restartedReview.ProcessDeviceResultAsync(submitted.Task.TaskNumber, DeviceOperationStatus.Succeeded);
+        Assert.Equal(OutboundReviewStatus.ReadyForReview, replayedDevice.Status);
+        var completed = await restartedReview.ReviewAsync(submitted.Task.TaskNumber, new OutboundReviewRequest(fixture.PalletId.ToString("D"), 10m, true));
+
+        Assert.Equal(OutboundReviewStatus.Completed, completed.Status);
+        Assert.Single(fixture.Inventory.GetTransactions().Where(item => item.Type == InventoryTransactionType.Decrease));
+    }
+
+    [Fact]
+    public async Task Outbound_snapshot_keeps_dispatch_attempt_options_and_allocation_key()
+    {
+        var workflowStore = new InMemoryBusinessWorkflowStore();
+        var fixture = CreateFixture(DeviceOperationStatus.Accepted, workflowStore: workflowStore);
+        var allocation = fixture.Allocate("outbound-snapshot-options");
+        await fixture.Tasks.SubmitAsync(allocation, new OutboundTaskRequest("outbound-snapshot-options", "PLC-01", fixture.LoadingPoint.Id, IdempotencyKey: "allocation-key-1", Priority: 7, MaxAttempts: 3));
+
+        var snapshot = await workflowStore.GetAsync("OutboundTask", "outbound-snapshot-options");
+        Assert.NotNull(snapshot);
+        Assert.Contains("\"Priority\":7", snapshot!.SnapshotJson, StringComparison.Ordinal);
+        Assert.Contains("\"MaxAttempts\":3", snapshot.SnapshotJson, StringComparison.Ordinal);
+        Assert.Contains("outbound-snapshot-options", snapshot.SnapshotJson, StringComparison.Ordinal);
+    }
+
+    private static Fixture CreateFixture(DeviceOperationStatus status, bool loadingPointOccupied = false, IResourceLockStore? resourceLockStore = null, IBusinessWorkflowStore? workflowStore = null)
     {
         var materialId = Guid.NewGuid();
         var palletId = Guid.NewGuid();
@@ -130,8 +191,8 @@ public sealed class OutboundWorkflowTests
         var loadingPoint = new LoadingPoint("LP-OUT-01", "出库口");
         var gateway = new ScenarioGateway(status);
         var scheduler = new WmsTaskScheduler(gateway);
-        var tasks = new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)], resourceLockStore);
-        var review = new OutboundReviewService(tasks, inventory);
+        var tasks = new OutboundTaskService(allocationService, scheduler, [new OutboundLoadingPoint(loadingPoint, loadingPointOccupied)], resourceLockStore, workflowStore);
+        var review = new OutboundReviewService(tasks, inventory, workflowStore);
         return new Fixture(materialId, palletId, locationId, new Location(locationId, "A-OUT-01", 1, 100m, 1000m, 1000m, 1000m), loadingPoint, inventory, allocationService, order, tasks, review);
     }
 

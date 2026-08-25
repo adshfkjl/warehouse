@@ -3,6 +3,7 @@ using Warehouse.Wms.Domain.Devices;
 using Warehouse.Wms.Domain.Inbound;
 using Warehouse.Wms.Domain.Tasks;
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
+using System.Text.Json;
 
 namespace Warehouse.Wms.Application.Inbound;
 
@@ -43,17 +44,21 @@ public sealed class PutawayTaskService
     private readonly Dictionary<string, PutawayTaskResult> _byTaskNumber = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _requestFingerprints = new(StringComparer.Ordinal);
     private readonly List<ResourceLock> _locks = [];
+    private readonly IBusinessWorkflowStore? _workflowStore;
+    private readonly Dictionary<string, int> _workflowVersions = new(StringComparer.Ordinal);
 
     public PutawayTaskService(
         InboundOrderService inboundOrders,
         PutawayAllocationService allocationService,
         WmsTaskScheduler scheduler,
-        IResourceLockStore? resourceLockStore = null)
+        IResourceLockStore? resourceLockStore = null,
+        IBusinessWorkflowStore? workflowStore = null)
     {
         _inboundOrders = inboundOrders ?? throw new ArgumentNullException(nameof(inboundOrders));
         _allocationService = allocationService ?? throw new ArgumentNullException(nameof(allocationService));
         _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _resourceLockStore = resourceLockStore;
+        _workflowStore = workflowStore;
     }
 
     public IReadOnlyCollection<PutawayTaskResult> Tasks
@@ -153,6 +158,8 @@ public sealed class PutawayTaskService
                 _requestFingerprints.Add(idempotencyKey, Fingerprint(pendingInventory, request));
             }
 
+            Persist(result);
+
             TryMarkPutawayQueued(pendingInventory);
             return result;
         }
@@ -206,6 +213,8 @@ public sealed class PutawayTaskService
             _byTaskNumber[queued.Task.TaskNumber] = submitted;
         }
 
+        Persist(submitted);
+
         return submitted;
     }
 
@@ -225,6 +234,84 @@ public sealed class PutawayTaskService
         PutawayTaskRequest request,
         CancellationToken cancellationToken = default)
         => CreateAndQueueAsync(pendingInventory, request, cancellationToken);
+
+    public void PersistCurrentState(string taskNumber)
+    {
+        lock (_gate)
+        {
+            if (!_byTaskNumber.TryGetValue(taskNumber.Trim(), out var result))
+                throw new KeyNotFoundException($"Putaway task '{taskNumber}' was not found.");
+            Persist(result);
+        }
+    }
+
+    private void Persist(PutawayTaskResult result)
+    {
+        if (_workflowStore is null || result.PendingInventory is null) return;
+        var key = result.Task.TaskNumber;
+        var version = _workflowVersions.TryGetValue(key, out var current) ? current : 0;
+        var dispatch = result.DispatchResult?.DeviceTaskNumber;
+        var state = new PutawayWorkflowState(
+            result.PendingInventory.Id, result.PendingInventory.OrderNumber, result.PendingInventory.MaterialId,
+            result.PendingInventory.PalletId, result.PendingInventory.PalletCode, result.PendingInventory.BatchNumber,
+            result.PendingInventory.Quantity, result.PendingInventory.WeightKg, result.Allocation.LocationId,
+            result.Allocation.LocationCode, result.Allocation.RecommendationReason, result.Allocation.AllocatedAt,
+            result.Task.State, result.DeviceTask.IdempotencyKey, dispatch, result.DeviceTask.DeviceId,
+            result.DeviceTask.SourceLocation, result.DeviceTask.DestinationLocation, result.DeviceTask.LoadingPoint,
+            result.DeviceTask.ProtocolVersion, result.ResourceLocks.Select(x => x.Id).ToArray());
+        var json = JsonSerializer.Serialize(state);
+        _workflowStore.SaveAsync(new BusinessWorkflowSnapshot("PutawayTask", key, version + 1, result.Task.State.ToString(), json, DateTimeOffset.UtcNow, key), version, "上架任务状态保存", "system").GetAwaiter().GetResult();
+        _workflowVersions[key] = version + 1;
+        _workflowStore.RegisterIdempotencyAsync("putaway-task", key, result.DeviceTask.IdempotencyKey, "PutawayTask", key).GetAwaiter().GetResult();
+    }
+
+    public async Task RestoreAsync(CancellationToken cancellationToken = default)
+    {
+        if (_workflowStore is null) return;
+        var snapshots = await _workflowStore.GetByTypeAsync("PutawayTask", cancellationToken);
+        var activeLocks = _resourceLockStore is null ? Array.Empty<ResourceLock>() : (await _resourceLockStore.GetActiveResourceLocksAsync(cancellationToken: cancellationToken)).ToArray();
+        foreach (var snapshot in snapshots)
+        {
+            var state = JsonSerializer.Deserialize<PutawayWorkflowState>(snapshot.SnapshotJson)
+                ?? throw new InvalidOperationException($"Putaway snapshot '{snapshot.AggregateKey}' is invalid.");
+            if (_byTaskNumber.ContainsKey(snapshot.AggregateKey)) continue;
+            var pending = _inboundOrders.PendingInboundInventory.FirstOrDefault(x => x.Id == state.PendingId)
+                ?? throw new InvalidOperationException($"Pending inbound '{state.PendingId}' for putaway task '{snapshot.AggregateKey}' was not restored.");
+            var allocation = new PutawayAllocation(state.PendingId, state.LocationId, state.LocationCode, state.RecommendationReason, state.AllocatedAt);
+            _allocationService.Restore(allocation);
+            var task = new WarehouseTask(snapshot.AggregateKey, "Putaway");
+            RestoreTaskState(task, state.TaskState);
+            var device = new DeviceTask(state.IdempotencyKey, snapshot.AggregateKey, state.DeviceId, state.SourceLocation, state.DestinationLocation, state.LoadingPoint, state.ProtocolVersion);
+            var request = new TaskDispatchRequest(task, device, DeviceOperationKind.Inbound) { DeviceTaskNumber = state.DeviceTaskNumber };
+            var locks = activeLocks.Where(x => state.ResourceLockIds.Contains(x.Id)
+                || string.Equals(x.OwnerTaskNumber, snapshot.AggregateKey, StringComparison.Ordinal)).ToArray();
+            var result = new PutawayTaskResult(allocation, task, device, locks, string.IsNullOrWhiteSpace(state.DeviceTaskNumber) ? null : new TaskDispatchResult(request, DeviceOperationStatus.Accepted, state.DeviceTaskNumber), pending);
+            _byTaskNumber[snapshot.AggregateKey] = result;
+            _byIdempotencyKey[state.IdempotencyKey] = result;
+            _requestFingerprints[state.IdempotencyKey] = "restored";
+            _workflowVersions[snapshot.AggregateKey] = snapshot.Version;
+        }
+    }
+
+    private static void RestoreTaskState(WarehouseTask task, TaskState target)
+    {
+        var path = target switch
+        {
+            TaskState.Queued => new[] { TaskState.Allocated, TaskState.Queued },
+            TaskState.SentToPlc => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc },
+            TaskState.Executing => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Executing },
+            TaskState.Succeeded => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Executing, TaskState.Succeeded },
+            TaskState.Failed => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.Failed },
+            TaskState.TimedOut => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.TimedOut },
+            TaskState.PhysicalStateUnknown => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Dispatching, TaskState.SentToPlc, TaskState.PhysicalStateUnknown },
+            TaskState.Canceled => new[] { TaskState.Allocated, TaskState.Queued, TaskState.Canceled },
+            _ => Array.Empty<TaskState>()
+        };
+        foreach (var state in path) task.TransitionTo(state, "recovery", "从上架业务快照恢复");
+        if (target != task.State) throw new InvalidOperationException($"Putaway task '{task.TaskNumber}' state '{target}' cannot be restored.");
+    }
+
+    private sealed record PutawayWorkflowState(Guid PendingId, string OrderNumber, Guid MaterialId, Guid? PalletId, string? PalletCode, string? BatchNumber, decimal Quantity, decimal WeightKg, Guid LocationId, string LocationCode, string RecommendationReason, DateTimeOffset AllocatedAt, TaskState TaskState, string IdempotencyKey, string? DeviceTaskNumber, string DeviceId, string? SourceLocation, string? DestinationLocation, string? LoadingPoint, string ProtocolVersion, IReadOnlyList<Guid> ResourceLockIds);
 
     private async Task<ResourceLock[]> AcquireLocksAsync(
         PendingInboundInventory pendingInventory,

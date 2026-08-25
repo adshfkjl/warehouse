@@ -19,11 +19,17 @@ public sealed class InboundOrder
     }
 
     public InboundOrder(string orderNumber, DateTimeOffset? createdAt = null)
+        : this(Guid.NewGuid(), orderNumber, createdAt ?? DateTimeOffset.UtcNow)
     {
-        Id = Guid.NewGuid();
+    }
+
+    public InboundOrder(Guid id, string orderNumber, DateTimeOffset createdAt, DateTimeOffset? updatedAt = null)
+    {
+        if (id == Guid.Empty) throw new ArgumentException("An order id is required.", nameof(id));
+        Id = id;
         OrderNumber = Require(orderNumber, nameof(orderNumber));
-        CreatedAt = Normalize(createdAt ?? DateTimeOffset.UtcNow);
-        UpdatedAt = CreatedAt;
+        CreatedAt = Normalize(createdAt);
+        UpdatedAt = Normalize(updatedAt ?? createdAt);
     }
 
     public Guid Id { get; private set; }
@@ -68,6 +74,31 @@ public sealed class InboundOrder
         string? batchNumber = null,
         DateOnly? expirationDate = null)
         => AddLine(new InboundLine(materialId, orderedQuantity, batchNumber, expirationDate));
+
+    public void RollbackMutation(InboundState state, DateTimeOffset updatedAt, int stateHistoryCount)
+        => RollbackMutation(state, updatedAt, stateHistoryCount, CanceledBy, CancellationReason);
+
+    public void RollbackMutation(InboundState state, DateTimeOffset updatedAt, int stateHistoryCount, string? canceledBy, string? cancellationReason)
+    {
+        if (stateHistoryCount < 0 || stateHistoryCount > _stateHistory.Count)
+            throw new ArgumentOutOfRangeException(nameof(stateHistoryCount));
+        if (!Enum.IsDefined(state)) throw new ArgumentOutOfRangeException(nameof(state));
+        _stateHistory.RemoveRange(stateHistoryCount, _stateHistory.Count - stateHistoryCount);
+        State = state;
+        UpdatedAt = Normalize(updatedAt);
+        CanceledBy = canceledBy;
+        CancellationReason = cancellationReason;
+    }
+
+    public void RemoveLine(Guid lineId, DateTimeOffset previousUpdatedAt)
+    {
+        EnsureState(InboundState.Draft, "Only a draft inbound order can remove lines.");
+        var index = _lines.FindLastIndex(line => line.Id == lineId);
+        if (index >= 0) _lines.RemoveAt(index);
+        UpdatedAt = Normalize(previousUpdatedAt);
+    }
+
+    public void RestoreUpdatedAt(DateTimeOffset updatedAt) => UpdatedAt = Normalize(updatedAt);
 
     public void TransitionTo(
         InboundState nextState,

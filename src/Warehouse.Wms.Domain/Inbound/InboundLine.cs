@@ -24,7 +24,8 @@ public sealed class InboundLine
         Guid materialId,
         decimal orderedQuantity,
         string? batchNumber = null,
-        DateOnly? expirationDate = null)
+        DateOnly? expirationDate = null,
+        Guid? id = null)
     {
         if (materialId == Guid.Empty)
         {
@@ -37,7 +38,8 @@ public sealed class InboundLine
                 nameof(orderedQuantity), orderedQuantity, "Ordered quantity must be greater than zero.");
         }
 
-        Id = Guid.NewGuid();
+        Id = id.GetValueOrDefault(Guid.NewGuid());
+        if (Id == Guid.Empty) throw new ArgumentException("An inbound line id is required.", nameof(id));
         MaterialId = materialId;
         OrderedQuantity = orderedQuantity;
         BatchNumber = Normalize(batchNumber);
@@ -83,7 +85,8 @@ public sealed class InboundLine
         string? palletCode,
         Guid? palletId,
         string? operatorId,
-        DateTimeOffset receivedAt)
+        DateTimeOffset receivedAt,
+        Guid? receiptId = null)
     {
         if (quantity <= 0m)
         {
@@ -97,7 +100,7 @@ public sealed class InboundLine
 
         var normalizedKey = Require(idempotencyKey, nameof(idempotencyKey));
         var receipt = new InboundReceipt(
-            Guid.NewGuid(),
+            receiptId.GetValueOrDefault(Guid.NewGuid()),
             normalizedKey,
             quantity,
             weightKg,
@@ -114,6 +117,18 @@ public sealed class InboundLine
         BatchNumber ??= receipt.BatchNumber;
         ExpirationDate ??= receipt.ExpirationDate;
         return receipt;
+    }
+
+    public void RemoveReceipt(Guid receiptId, decimal previousReceivedQuantity, decimal previousReceivedWeightKg, string? previousBatchNumber, DateOnly? previousExpirationDate)
+    {
+        if (receiptId == Guid.Empty) return;
+        var index = _receipts.FindLastIndex(receipt => receipt.Id == receiptId);
+        if (index < 0) return;
+        _receipts.RemoveAt(index);
+        ReceivedQuantity = previousReceivedQuantity;
+        ReceivedWeightKg = previousReceivedWeightKg;
+        BatchNumber = previousBatchNumber;
+        ExpirationDate = previousExpirationDate;
     }
 
     private static string? Normalize(string? value)

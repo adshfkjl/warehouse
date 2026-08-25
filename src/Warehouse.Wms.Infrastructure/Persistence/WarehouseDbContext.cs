@@ -26,6 +26,9 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<TaskStateHistory> TaskStateHistories => Set<TaskStateHistory>();
     public DbSet<ResourceLock> ResourceLocks => Set<ResourceLock>();
     public DbSet<TaskIdempotencyKey> TaskIdempotencyKeys => Set<TaskIdempotencyKey>();
+    public DbSet<BusinessWorkflowEntity> BusinessWorkflows => Set<BusinessWorkflowEntity>();
+    public DbSet<BusinessWorkflowStateHistoryEntity> BusinessWorkflowHistories => Set<BusinessWorkflowStateHistoryEntity>();
+    public DbSet<BusinessWorkflowIdempotencyEntity> BusinessWorkflowIdempotency => Set<BusinessWorkflowIdempotencyEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -268,6 +271,45 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.Property(x => x.RequestHash).HasMaxLength(128).IsRequired();
             entity.HasIndex(x => new { x.Scope, x.Key }).IsUnique();
             entity.HasIndex(x => x.TaskId);
+        });
+
+        modelBuilder.Entity<BusinessWorkflowEntity>(entity =>
+        {
+            entity.ToTable("BusinessWorkflows");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.AggregateType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AggregateKey).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.Property(x => x.Status).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.SnapshotJson).HasColumnType("nvarchar(max)").IsRequired();
+            entity.Property(x => x.WarehouseTaskNumber).HasMaxLength(128);
+            entity.HasIndex(x => new { x.AggregateType, x.AggregateKey }).IsUnique();
+            entity.HasIndex(x => x.UpdatedAt);
+        });
+
+        modelBuilder.Entity<BusinessWorkflowStateHistoryEntity>(entity =>
+        {
+            entity.ToTable("BusinessWorkflowStateHistories");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.AggregateType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AggregateKey).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.FromStatus).HasMaxLength(64);
+            entity.Property(x => x.ToStatus).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.Property(x => x.OperatorId).HasMaxLength(128);
+            entity.HasIndex(x => new { x.AggregateType, x.AggregateKey, x.Version }).IsUnique();
+        });
+
+        modelBuilder.Entity<BusinessWorkflowIdempotencyEntity>(entity =>
+        {
+            entity.ToTable("BusinessWorkflowIdempotency");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Scope).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Key).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.RequestHash).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AggregateType).HasMaxLength(128);
+            entity.Property(x => x.AggregateKey).HasMaxLength(256);
+            entity.HasIndex(x => new { x.Scope, x.Key }).IsUnique();
         });
 
         SeedDevelopmentData(modelBuilder);

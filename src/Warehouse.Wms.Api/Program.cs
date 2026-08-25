@@ -91,6 +91,8 @@ else
     builder.Services.AddSingleton<IResourceLockStore>(sp => sp.GetRequiredService<InMemoryTaskPersistenceStore>());
     builder.Services.AddSingleton<InMemoryIntegrationOutbox>();
     builder.Services.AddSingleton<IIntegrationOutbox>(sp => sp.GetRequiredService<InMemoryIntegrationOutbox>());
+    builder.Services.AddSingleton<InMemoryBusinessWorkflowStore>();
+    builder.Services.AddSingleton<IBusinessWorkflowStore>(sp => sp.GetRequiredService<InMemoryBusinessWorkflowStore>());
 }
 builder.Services.AddSingleton<InboundOrderService>();
 builder.Services.AddSingleton<PutawayAllocationService>();
@@ -98,7 +100,8 @@ builder.Services.AddSingleton<PutawayTaskService>(sp => new PutawayTaskService(
     sp.GetRequiredService<InboundOrderService>(),
     sp.GetRequiredService<PutawayAllocationService>(),
     sp.GetRequiredService<WmsTaskScheduler>(),
-    sp.GetService<IResourceLockStore>()));
+    sp.GetService<IResourceLockStore>(),
+    sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddSingleton<InboundReconciliationService>(sp => new InboundReconciliationService(
     sp.GetRequiredService<InboundOrderService>(),
     sp.GetRequiredService<PutawayTaskService>(),
@@ -109,9 +112,13 @@ builder.Services.AddSingleton<OutboundAllocationService>(sp => new OutboundAlloc
 builder.Services.AddSingleton<OutboundTaskService>(sp => new OutboundTaskService(
     sp.GetRequiredService<OutboundAllocationService>(),
     sp.GetRequiredService<WmsTaskScheduler>(),
-    Array.Empty<OutboundLoadingPoint>(),
-    sp.GetService<IResourceLockStore>()));
-builder.Services.AddSingleton<OutboundReviewService>();
+    [new OutboundLoadingPoint(new Warehouse.Wms.Domain.MasterData.LoadingPoint(Guid.Parse("00000000-0000-0000-0000-000000000006"), "LP-DEV-01", "开发装载点"), false)],
+    sp.GetService<IResourceLockStore>(),
+    sp.GetService<IBusinessWorkflowStore>()));
+builder.Services.AddSingleton<OutboundReviewService>(sp => new OutboundReviewService(
+    sp.GetRequiredService<OutboundTaskService>(),
+    sp.GetRequiredService<InventoryService>(),
+    sp.GetService<IBusinessWorkflowStore>()));
 builder.Services.AddSingleton<RelocationService>(sp => new RelocationService(
     sp.GetRequiredService<InventoryService>(), sp.GetRequiredService<WmsTaskScheduler>(), sp.GetService<IResourceLockStore>()));
 builder.Services.AddSingleton<StocktakingService>(sp => new StocktakingService(

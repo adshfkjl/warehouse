@@ -7,7 +7,10 @@ using Warehouse.Wms.Application.Tasks;
 namespace Warehouse.Wms.Application.Outbound;
 
 public sealed record OutboundAllocationRequest(string IdempotencyKey, string OrderNumber, Guid LineId, decimal Quantity, string? BatchNumber = null, Guid? PalletId = null, Guid? LocationId = null);
-public sealed record OutboundAllocation(OutboundOrder Order, OutboundLine Line, InventoryBalance Source, decimal Quantity, IReadOnlyList<ResourceLock> ResourceLocks);
+public sealed record OutboundAllocation(OutboundOrder Order, OutboundLine Line, InventoryBalance Source, decimal Quantity, IReadOnlyList<ResourceLock> ResourceLocks)
+{
+    public string? IdempotencyKey { get; init; }
+}
 
 public sealed class OutboundAllocationService
 {
@@ -24,6 +27,51 @@ public sealed class OutboundAllocationService
         _resourceLockStore = resourceLockStore;
     }
     public IReadOnlyCollection<OutboundOrder> Orders { get { lock (_gate) return _orders.Values.ToArray(); } }
+
+    /// <summary>Rehydrates an allocation from a durable task snapshot without reacquiring locks.</summary>
+    public OutboundAllocation Restore(
+        string orderNumber,
+        Guid lineId,
+        Guid materialId,
+        Guid? palletId,
+        Guid? locationId,
+        string? batchNumber,
+        decimal requestedQuantity,
+        decimal quantity,
+        IReadOnlyList<ResourceLock> resourceLocks,
+        string? allocationIdempotencyKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(resourceLocks);
+        lock (_gate)
+        {
+            var normalized = orderNumber.Trim();
+            if (!_orders.TryGetValue(normalized, out var order))
+            {
+                order = new OutboundOrder(normalized);
+                _orders.Add(normalized, order);
+            }
+            var line = order.Lines.FirstOrDefault(item => item.Id == lineId);
+            if (line is null)
+            {
+                line = new OutboundLine(materialId, requestedQuantity, batchNumber, palletId, locationId);
+                order.AddLine(line);
+            }
+            var source = _inventory.GetBalance(materialId, palletId, locationId, batchNumber)
+                ?? throw new InvalidOperationException($"Inventory source for restored outbound task '{normalized}' was not found.");
+            var allocation = new OutboundAllocation(order, line, source, quantity, resourceLocks) { IdempotencyKey = allocationIdempotencyKey };
+            var key = $"recovered:{normalized}:{line.Id:D}:{quantity:G29}";
+            _allocations[key] = allocation;
+            if (!string.IsNullOrWhiteSpace(allocationIdempotencyKey))
+                _allocations[allocationIdempotencyKey] = allocation;
+            while (order.State != OutboundState.Locked)
+            {
+                if (order.State == OutboundState.Draft) order.TransitionTo(OutboundState.Allocated);
+                else if (order.State == OutboundState.Allocated) order.TransitionTo(OutboundState.Locked);
+                else break;
+            }
+            return allocation;
+        }
+    }
 
     public OutboundOrder Create(string orderNumber, IEnumerable<OutboundLine>? lines = null)
     {
@@ -99,7 +147,7 @@ public sealed class OutboundAllocationService
             }
             order.TransitionTo(OutboundState.Allocated);
             order.TransitionTo(OutboundState.Locked);
-            var allocation = new OutboundAllocation(order, line, source, request.Quantity, locks);
+            var allocation = new OutboundAllocation(order, line, source, request.Quantity, locks) { IdempotencyKey = request.IdempotencyKey };
             _allocations.Add(request.IdempotencyKey, allocation);
             return allocation;
         }

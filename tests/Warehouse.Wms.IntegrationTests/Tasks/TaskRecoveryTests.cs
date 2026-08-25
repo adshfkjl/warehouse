@@ -54,6 +54,30 @@ public sealed class TaskRecoveryTests
         Assert.Equal(TaskState.PhysicalStateUnknown, request.Task.State);
     }
 
+    [Fact]
+    public async Task Worker_blocks_dispatch_snapshot_when_business_snapshot_is_missing()
+    {
+        var gateway = new RecoveryGateway(DeviceCapability.TaskQuery, DeviceOperationStatus.Executing);
+        var taskStore = new InMemoryTaskPersistenceStore();
+        var businessStore = new InMemoryBusinessWorkflowStore();
+        var scheduler = new WmsTaskScheduler(gateway, persistenceStore: taskStore);
+        await scheduler.EnqueueAsync(new TaskDispatchRequest(
+            new WarehouseTask("recover-missing-business", "Outbound"),
+            new DeviceTask("missing-business-idem", "recover-missing-business", "PLC-01", "SRC", "DST", "LP", "v1"),
+            DeviceOperationKind.Outbound));
+
+        var worker = new TaskWorker(
+            new WmsTaskScheduler(gateway, persistenceStore: taskStore),
+            workflowRecovery: new WorkflowRecoveryService(taskStore),
+            taskPersistence: taskStore,
+            businessWorkflows: businessStore);
+        await worker.RunOnceAsync();
+
+        var persisted = await taskStore.GetTaskAsync("recover-missing-business");
+        Assert.Equal(WorkflowRecoveryStatus.BlockedMissingBusinessState, persisted!.WorkflowRecoveryStatus);
+        Assert.Equal(0, gateway.SubmissionCount);
+    }
+
     private sealed class RecoveryGateway(DeviceCapability capabilities, DeviceOperationStatus status) : IWarehouseDeviceGateway
     {
         public int SubmissionCount { get; private set; }

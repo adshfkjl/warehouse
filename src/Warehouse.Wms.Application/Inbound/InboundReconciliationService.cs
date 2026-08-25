@@ -78,6 +78,7 @@ public sealed class InboundReconciliationService
             or DeviceOperationStatus.TimedOut)
         {
             MarkUnknown(taskResult);
+            _putawayTasks.PersistCurrentState(normalizedTaskNumber);
             var unknown = new PutawayReconciliationResult(
                 normalizedTaskNumber,
                 PutawayReconciliationStatus.PhysicalStateUnknown);
@@ -88,6 +89,7 @@ public sealed class InboundReconciliationService
         if (status is DeviceOperationStatus.Failed or DeviceOperationStatus.Offline)
         {
             MarkFailed(taskResult);
+            _putawayTasks.PersistCurrentState(normalizedTaskNumber);
             var failure = new PutawayReconciliationResult(
                 normalizedTaskNumber,
                 PutawayReconciliationStatus.Exception);
@@ -135,6 +137,7 @@ public sealed class InboundReconciliationService
             cancellationToken);
 
         lock (_gate) _completedPendingInventory.Add(pending.Id);
+        _putawayTasks.PersistCurrentState(normalizedTaskNumber);
         await ReleaseLocksAsync(taskResult.ResourceLocks, normalizedTaskNumber, cancellationToken);
         TryCompleteOrder(pending.OrderNumber);
         var completed = new PutawayReconciliationResult(
