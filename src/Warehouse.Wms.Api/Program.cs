@@ -52,6 +52,12 @@ if (string.IsNullOrWhiteSpace(configuredPersistenceMode) && builder.Environment.
 }
 
 var persistenceMode = configuredPersistenceMode ?? "InMemory";
+if (builder.Environment.IsProduction()
+    && !persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException("Production requires Wms:PersistenceMode=SqlServer.");
+}
+
 if (!persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase)
     && !persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
 {

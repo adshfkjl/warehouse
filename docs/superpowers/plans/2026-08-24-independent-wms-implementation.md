@@ -1057,7 +1057,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **外部门禁:** `HUMAN_PENDING`（任务保留、锁租约时长、并发隔离级别和运维清理策略待负责人确认）；`FIELD_PENDING`（真实 PLC 重启/断网、物理资源对账和现场恢复未验证）。
 
-**执行记录（2026-08-26）:** terra 按 TDD 新增任务/锁持久化边界、SQL 仓储、EF 迁移和单元/SQL 集成测试。主代理修复导航 Include、EF 版本原值保存、生产模式隐式回退校验、测试数据库隔离和锁 token 强制校验；Docker SQL Server 实测迁移与重启恢复 1/1 通过；单元 116、集成 45（含 5 个 SQL 场景）、设备契约 37 通过；构建 0 警告/0 错误；`scripts/verify.ps1` 在 Development 配置下通过，健康端点 200，旧目录保护通过。自动化状态：`AGENT_VERIFIED`。已知限制：`TaskScheduler` 及业务闭环仍使用进程内调度状态，留待 Task 9.6；真实 PLC/现场恢复为 `FIELD_PENDING`。提交：`d49b6c0`。推送 `target/agent/wms-implementation` 于 2026-08-26 因 GitHub 连接重置失败，状态 `PUSH_PENDING`，不阻塞后续任务。
+**执行记录（2026-08-26）:** terra 按 TDD 新增任务/锁持久化边界、SQL 仓储、EF 迁移和单元/SQL 集成测试。主代理修复导航 Include、EF 版本原值保存、生产模式隐式回退校验、测试数据库隔离和锁 token 强制校验；随后补充 Production 拒绝显式 InMemory 的配置门禁并实测启动失败；Docker SQL Server 实测迁移与重启恢复 1/1 通过；单元 116、集成 45（含 5 个 SQL 场景）、设备契约 37 通过；构建 0 警告/0 错误；`scripts/verify.ps1` 在 Development 配置下通过，健康端点 200，旧目录保护通过。自动化状态：`AGENT_VERIFIED`。已知限制：`TaskScheduler` 及业务闭环仍使用进程内调度状态，留待 Task 9.6；真实 PLC/现场恢复为 `FIELD_PENDING`。提交：`d49b6c0`、`92b74bc` 及配置门禁修复提交。推送 `target/agent/wms-implementation` 于 2026-08-26 因 GitHub 连接重置/无法连接失败，状态 `PUSH_PENDING`，不阻塞后续任务。
 
 ### Task 9.6：任务持久化运行时接入和重启恢复 Worker
 
