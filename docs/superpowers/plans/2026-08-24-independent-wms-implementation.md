@@ -534,12 +534,18 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Application/Inbound/InboundOrderService.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Inbound/InboundOrderTests.cs`
 
-- [ ] 定义 `Draft`、`Receiving`、`Received`、`PutawayQueued`、`Completed`、`Canceled` 和 `Exception`。
-- [ ] 实现手工建单、明细收货、批次/有效期、托盘绑定和重量采集。
-- [ ] 收货数量只能进入待入库库存，不得直接变为库位实存。
-- [ ] 测试部分收货、重复收货、数量超限、托盘重复绑定和取消。
+- [x] 定义 `Draft`、`Receiving`、`Received`、`PutawayQueued`、`Completed`、`Canceled` 和 `Exception`。
+- [x] 实现手工建单、明细收货、批次/有效期、托盘绑定和重量采集。
+- [x] 收货数量只能进入待入库库存，不得直接变为库位实存。
+- [x] 测试部分收货、重复收货、数量超限、托盘重复绑定和取消。
 
 **验收:** `AGENT_VERIFIED`；可无 ERP 创建入库单和待上架库存。
+
+**Task 5.1 执行证据（2026-08-25）：** 新增入库单/明细领域模型和内存 `InboundOrderService`；实现状态迁移、手工建单、部分/全量收货、批次/有效期、托盘编码/ID 唯一绑定、重量采集、幂等重放和超量拒绝。每次收货生成 `PendingInboundInventory`，状态为 `PendingInbound` 且 `LocationId = null`，未调用 `InventoryService` 增加库位实存；`Exception` 状态入库单拒绝新收货。新增 10 个单元测试，覆盖状态、部分收货、待入库边界、重复键、摘要冲突、超量、托盘重复绑定、取消、异常状态和非法明细/数量；Task 5.1 定向测试 10 个通过，现有 WMS 单元测试共 60 个通过。当前服务与收货记录为内存契约，SQL Server 持久化、库位分配和设备上架由后续 Task 5.2/5.3 完成。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（入库状态、批次/有效期、重量和取消语义待负责人确认）；`FIELD_PENDING`（真实托盘、设备和账实流程未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 5.1A：实现 Excel 入库/出库导入
 
