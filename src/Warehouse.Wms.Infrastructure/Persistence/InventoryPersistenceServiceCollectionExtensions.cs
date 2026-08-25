@@ -24,6 +24,9 @@ public static class InventoryPersistenceServiceCollectionExtensions
         services.AddSingleton<IOutboxMessageStore>(sp => sp.GetRequiredService<SqlServerMessageStore>());
         services.AddSingleton<IInboxMessageStore>(sp => sp.GetRequiredService<SqlServerMessageStore>());
         services.AddSingleton<ITaskCommandOutbox, SqlServerTaskCommandOutbox>();
+        services.AddSingleton<SqlServerTaskPersistenceStore>();
+        services.AddSingleton<ITaskPersistenceStore>(sp => sp.GetRequiredService<SqlServerTaskPersistenceStore>());
+        services.AddSingleton<IResourceLockStore>(sp => sp.GetRequiredService<SqlServerTaskPersistenceStore>());
         services.AddSingleton<IIntegrationOutbox, SqlServerIntegrationOutbox>();
         return services;
     }

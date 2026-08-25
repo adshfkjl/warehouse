@@ -62,14 +62,16 @@ public sealed class TaskConcurrencyTests
             ownerTaskNumber: "TASK-001",
             expectedVersion: 1,
             renewedAt: acquiredAt.AddMinutes(1),
-            leaseDuration: TimeSpan.FromMinutes(5));
+            leaseDuration: TimeSpan.FromMinutes(5),
+            lockToken: resourceLock.LockToken);
 
         Assert.Equal(2, resourceLock.Version);
         Assert.Throws<InvalidOperationException>(() => resourceLock.Renew(
             ownerTaskNumber: "TASK-001",
             expectedVersion: 1,
             renewedAt: acquiredAt.AddMinutes(2),
-            leaseDuration: TimeSpan.FromMinutes(5)));
+            leaseDuration: TimeSpan.FromMinutes(5),
+            lockToken: resourceLock.LockToken));
     }
 
     [Fact]

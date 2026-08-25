@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Warehouse.Wms.Domain.Inventory;
 using Warehouse.Wms.Domain.MasterData;
+using Warehouse.Wms.Domain.Tasks;
 using WarehouseEntity = Warehouse.Wms.Domain.MasterData.Warehouse;
 
 namespace Warehouse.Wms.Infrastructure.Persistence;
@@ -21,6 +22,10 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<InventoryTransactionEntity> InventoryTransactions => Set<InventoryTransactionEntity>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
+    public DbSet<WarehouseTask> Tasks => Set<WarehouseTask>();
+    public DbSet<TaskStateHistory> TaskStateHistories => Set<TaskStateHistory>();
+    public DbSet<ResourceLock> ResourceLocks => Set<ResourceLock>();
+    public DbSet<TaskIdempotencyKey> TaskIdempotencyKeys => Set<TaskIdempotencyKey>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -209,6 +214,55 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.HasIndex(x => x.MessageId).IsUnique();
             entity.HasIndex(x => new { x.IdempotencyKey, x.ResultVersion }).IsUnique();
             entity.HasIndex(x => new { x.Status, x.ReceivedAt, x.ClaimExpiresAt });
+        });
+
+        modelBuilder.Entity<WarehouseTask>(entity =>
+        {
+            entity.ToTable("WarehouseTasks");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TaskNumber).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.TaskType).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.State).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.HasIndex(x => x.TaskNumber).IsUnique();
+            entity.HasMany(x => x.StateHistory).WithOne().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TaskStateHistory>(entity =>
+        {
+            entity.ToTable("TaskStateHistories");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.FromState).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.ToState).HasConversion<string>().HasMaxLength(32).IsRequired();
+            entity.Property(x => x.Operator).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+            entity.Property(x => x.ErrorCode).HasMaxLength(128);
+            entity.HasIndex(x => new { x.TaskId, x.Version }).IsUnique();
+            entity.HasOne<WarehouseTask>().WithMany(x => x.StateHistory).HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ResourceLock>(entity =>
+        {
+            entity.ToTable("ResourceLocks");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ResourceType).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.ResourceId).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.OwnerTaskNumber).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.LockToken).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.HasIndex(x => new { x.ResourceType, x.ResourceId }).IsUnique().HasFilter("[ReleasedAt] IS NULL");
+            entity.HasIndex(x => new { x.ExpiresAt, x.ReleasedAt });
+        });
+
+        modelBuilder.Entity<TaskIdempotencyKey>(entity =>
+        {
+            entity.ToTable("TaskIdempotencyKeys");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Scope).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Key).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.RequestHash).HasMaxLength(128).IsRequired();
+            entity.HasIndex(x => new { x.Scope, x.Key }).IsUnique();
+            entity.HasIndex(x => x.TaskId);
         });
 
         SeedDevelopmentData(modelBuilder);

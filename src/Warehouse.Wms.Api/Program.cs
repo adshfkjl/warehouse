@@ -45,7 +45,13 @@ builder.Services.AddSingleton<WmsTaskScheduler>(sp => new WmsTaskScheduler(
     sp.GetService<ITaskCommandOutbox>(),
     builder.Configuration["Wms:SchedulerWorkerId"]));
 
-var persistenceMode = builder.Configuration["Wms:PersistenceMode"] ?? "InMemory";
+var configuredPersistenceMode = builder.Configuration["Wms:PersistenceMode"];
+if (string.IsNullOrWhiteSpace(configuredPersistenceMode) && builder.Environment.IsProduction())
+{
+    throw new InvalidOperationException("Wms:PersistenceMode must be explicitly configured in Production.");
+}
+
+var persistenceMode = configuredPersistenceMode ?? "InMemory";
 if (!persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase)
     && !persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
 {
@@ -67,6 +73,9 @@ if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
 else
 {
     builder.Services.AddSingleton<InventoryService>();
+    builder.Services.AddSingleton<InMemoryTaskPersistenceStore>();
+    builder.Services.AddSingleton<ITaskPersistenceStore>(sp => sp.GetRequiredService<InMemoryTaskPersistenceStore>());
+    builder.Services.AddSingleton<IResourceLockStore>(sp => sp.GetRequiredService<InMemoryTaskPersistenceStore>());
     builder.Services.AddSingleton<InMemoryIntegrationOutbox>();
     builder.Services.AddSingleton<IIntegrationOutbox>(sp => sp.GetRequiredService<InMemoryIntegrationOutbox>());
 }

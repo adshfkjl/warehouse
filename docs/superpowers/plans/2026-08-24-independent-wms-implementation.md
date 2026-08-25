@@ -1030,6 +1030,50 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 已知限制：任务实体、资源锁和命令发布 Worker 尚未完成 SQL 持久化/跨进程恢复；未知命令仍需设备对账或人工确认后处置。
 - 旧系统：`warehouse/` 仅作只读参考，未修改。
 
+### Task 9.5：任务实体、状态历史、资源锁和任务幂等键 SQL 持久化
+
+**前置条件:** Task 4.1、4.2、4.3、4.4、9.1、9.2A、9.3 和 9.4 已达到 `AGENT_VERIFIED`；开发 SQL Server 容器可用；不得连接生产 PLC、生产数据库或 ERP。
+
+**目标:** 将任务实体、任务状态历史、资源锁和任务幂等键从仅内存领域契约提升为可跨进程恢复的 SQL Server 业务真相，同时保留显式 InMemory 实现供单元/契约测试使用。
+
+**允许修改范围:**
+- `src/Warehouse.Wms.Application/Tasks/` 的任务/状态历史/资源锁持久化抽象和服务组合
+- `src/Warehouse.Wms.Infrastructure/Persistence/` 的任务、状态历史、资源锁、幂等键 EF 映射、仓储、DbContext 和迁移
+- `src/Warehouse.Wms.Api/Program.cs`、开发配置和健康探针组合
+- `tests/Warehouse.Wms.UnitTests/Tasks/`、`tests/Warehouse.Wms.IntegrationTests/Tasks/`
+- `PROJECT_DESIGN.md`、本计划和必要的运维/恢复说明
+
+**必须完成:**
+- [x] 定义 `ITaskPersistenceStore`、`IResourceLockStore` 或等价边界；内存实现只能通过显式测试/开发模式注册。
+- [x] 增加 `WarehouseTask`、`TaskStateHistory`、`ResourceLock` 和 `TaskIdempotencyKey` 的 EF Core 映射、字段长度、UTC 时间、枚举转换、唯一索引和乐观版本约束。
+- [x] 以任务号、资源业务键（`ResourceType + ResourceId`）和幂等唯一键建立数据库唯一约束；任务状态历史按任务和版本可追溯，禁止静默覆盖。
+- [x] 创建任务、状态迁移及历史追加、幂等键登记、资源锁获取/续租/释放分别使用独立短事务；版本冲突、错误 owner/token、摘要冲突和活动锁冲突必须拒绝。
+- [x] 支持租约到期后的安全抢占、续租和释放；未过期锁不得被新任务取得，过期或已释放锁不得被旧 owner 续租。
+- [x] 服务重启后从 SQL 恢复未完成任务、状态历史、有效资源锁和幂等记录；不得在恢复时重复下发 PLC 命令或重复释放资源。
+- [x] 增加迁移、空库建库、重启恢复、重复创建/重放、摘要冲突、锁并发/租约/版本冲突、状态历史完整性和任务状态版本冲突测试。
+- [x] 不把 PLC 调用、设备等待、轮询或回调放入数据库事务，不修改 `warehouse/`。
+
+**验收:** `AGENT_VERIFIED`（持久化基础设施）；定向单元/SQL 集成测试、完整构建测试和 Docker 迁移通过；SQL Server 重启后任务、历史、有效锁和幂等记录可恢复。调度器/业务服务消费该接口及未完成任务恢复仍由 Task 9.6 验收，完成前不得声称生产调度已脱离内存状态。
+
+**外部门禁:** `HUMAN_PENDING`（任务保留、锁租约时长、并发隔离级别和运维清理策略待负责人确认）；`FIELD_PENDING`（真实 PLC 重启/断网、物理资源对账和现场恢复未验证）。
+
+**执行记录（2026-08-26）:** terra 按 TDD 新增任务/锁持久化边界、SQL 仓储、EF 迁移和单元/SQL 集成测试。主代理修复导航 Include、EF 版本原值保存、生产模式隐式回退校验、测试数据库隔离和锁 token 强制校验；Docker SQL Server 实测迁移与重启恢复 1/1 通过；单元 116、集成 45（含 5 个 SQL 场景）、设备契约 37 通过；构建 0 警告/0 错误。自动化状态：`AGENT_VERIFIED`。已知限制：`TaskScheduler` 及业务闭环仍使用进程内调度状态，留待 Task 9.6；真实 PLC/现场恢复为 `FIELD_PENDING`。推送失败不阻塞后续任务，需记录 `PUSH_PENDING`。
+
+### Task 9.6：任务持久化运行时接入和重启恢复 Worker
+
+**前置条件:** Task 9.5 已达到 `AGENT_VERIFIED`；不得连接生产 PLC/数据库。
+
+**目标:** 将 `TaskScheduler`、入库/出库/移库/盘点业务服务的任务创建、状态迁移、幂等登记和资源锁操作接入 `ITaskPersistenceStore`/`IResourceLockStore`，并实现服务重启后从 SQL 恢复未完成任务而不重复下发设备命令。
+
+**必须完成:**
+- [ ] 调度器不再以 `TaskSchedulerState.Requests` 作为 SQL 模式业务真相；内存状态只作短期调度缓存。
+- [ ] 任务入队、Dispatching/SentToPlc/Executing/终态迁移、设备结果和异常处置均提交 SQL 状态历史与版本。
+- [ ] 业务锁获取/续租/释放使用持久化锁，设备等待期间不持有数据库事务。
+- [ ] Worker 启动扫描未完成任务、对账 Outbox/Inbox 和设备任务号能力；无法确认的任务进入 `PhysicalStateUnknown`，不得重复下发。
+- [ ] 增加 API SQL 组合、跨进程调度、服务重启、并发版本冲突和设备命令不重复发送测试。
+
+**验收:** `AGENT_VERIFIED`；SQL 模式业务闭环和重启恢复测试通过，内存模式仅在显式开发/测试配置可用；真实 PLC 恢复仍需 `FIELD_PENDING`。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁

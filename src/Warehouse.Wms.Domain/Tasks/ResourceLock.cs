@@ -80,7 +80,7 @@ public sealed class ResourceLock
         int expectedVersion,
         DateTimeOffset renewedAt,
         TimeSpan leaseDuration,
-        Guid? lockToken = null)
+        Guid lockToken)
     {
         EnsureMutationAllowed(ownerTaskNumber, expectedVersion, lockToken);
         if (leaseDuration <= TimeSpan.Zero)
@@ -102,7 +102,7 @@ public sealed class ResourceLock
         string ownerTaskNumber,
         int expectedVersion,
         DateTimeOffset releasedAt,
-        Guid? lockToken = null)
+        Guid lockToken)
     {
         EnsureMutationAllowed(ownerTaskNumber, expectedVersion, lockToken);
         if (ReleasedAt is not null)
@@ -131,7 +131,7 @@ public sealed class ResourceLock
             throw new InvalidOperationException("Only the owning task may mutate a resource lock.");
         }
 
-        if (lockToken.HasValue && lockToken.Value != LockToken)
+        if (lockToken == Guid.Empty || lockToken != LockToken)
         {
             throw new InvalidOperationException("The resource lock token does not match.");
         }
