@@ -730,12 +730,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Create: `src/Warehouse.Wms.Api/Controllers/RolesController.cs`
 - Test: `tests/Warehouse.Wms.IntegrationTests/Identity/AuthorizationTests.cs`
 
-- [ ] 实现 JWT Bearer、刷新令牌、退出、密码修改和账号禁用。
-- [ ] 实现用户、角色、功能权限和仓库范围授权。
-- [ ] 对库存调整、任务取消、停止请求、人工物理结果确认和差异审批增加二次权限。
-- [ ] 将登录、权限变更、设备任务和高风险操作写入审计日志。
+- [x] 实现 JWT Bearer、刷新令牌、退出、密码修改和账号禁用。
+- [x] 实现用户、角色、功能权限和仓库范围授权。
+- [x] 对库存调整、任务取消、停止请求、人工物理结果确认和差异审批增加二次权限。
+- [x] 将登录、权限变更、设备任务和高风险操作写入审计日志。
 
 **验收:** `AGENT_VERIFIED`；未授权用户无法执行高风险操作，审计可追溯。
+
+**Task 6.3 执行证据（2026-08-25）：** 新增 `IIdentityService`、`InMemoryIdentityService`、身份契约和 API 用户/角色控制器；开发 API 接入 JWT Bearer、`ICurrentUser` 仓库范围和统一异常状态码。实现 PBKDF2 密码哈希、JWT 访问令牌、一次性刷新令牌、注销、改密、账号禁用、角色分配、权限授予、仓库范围校验和高风险二次授权；`IAuditLog` 记录登录、刷新、注销、改密、禁用、角色/权限变更、设备任务和高风险授权。身份集成测试 6 个通过，API 健康检查为 200，匿名高风险接口为 401。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（角色矩阵、仓库范围和高风险操作审批人待负责人确认）；`FIELD_PENDING`（真实用户目录、密钥轮换和现场登录验证未执行）。
+- 已知限制：当前用户、刷新令牌和审计为内存实现；尚未接入 SQL Server、分布式注销、密码找回通知和生产密钥管理。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ### Task 6.4：实现最小可用管理界面
 
