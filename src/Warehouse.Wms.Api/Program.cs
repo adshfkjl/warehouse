@@ -80,12 +80,14 @@ if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
     }
 
     builder.Services.AddSqlServerInventoryPersistence(connectionString);
+    builder.Services.AddSingleton<ILoadingPointRuntimeStatus, UnknownLoadingPointRuntimeStatus>();
     builder.Services.AddSingleton<ILoadingPointCatalog, SqlServerLoadingPointCatalog>();
     builder.Services.AddSingleton<InventoryService>(sp =>
         new InventoryService(sp.GetRequiredService<IInventoryLedgerStore>()));
 }
 else
 {
+    builder.Services.AddSingleton<ILoadingPointRuntimeStatus, InMemoryLoadingPointRuntimeStatus>();
     builder.Services.AddSingleton<ILoadingPointCatalog>(_ => new InMemoryLoadingPointCatalog([
         new OutboundLoadingPoint(new Warehouse.Wms.Domain.MasterData.LoadingPoint(Guid.Parse("00000000-0000-0000-0000-000000000006"), "LP-DEV-01", "开发装载点"), false)
     ]));

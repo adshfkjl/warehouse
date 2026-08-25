@@ -19,4 +19,14 @@ public sealed class LoadingPointCatalogTests
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => catalog.GetAsync(cancellation.Token));
     }
+
+    [Fact]
+    public async Task In_memory_catalog_preserves_occupied_and_faulted_state()
+    {
+        var point = new OutboundLoadingPoint(new LoadingPoint(Guid.NewGuid(), "LP-02", "状态装载点"), true, true, false, false);
+        var result = await new InMemoryLoadingPointCatalog([point]).GetAsync();
+        var restored = Assert.Single(result);
+        Assert.True(restored.IsOccupied);
+        Assert.True(restored.IsFaulted);
+    }
 }

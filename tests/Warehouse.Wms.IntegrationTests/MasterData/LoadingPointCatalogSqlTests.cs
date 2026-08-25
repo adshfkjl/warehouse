@@ -18,11 +18,12 @@ public sealed class LoadingPointCatalogSqlTests
         var factory = new TestDbContextFactory(options);
         await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
 
-        var points = await new SqlServerLoadingPointCatalog(factory).GetAsync();
+        var points = await new SqlServerLoadingPointCatalog(factory, new UnknownLoadingPointRuntimeStatus()).GetAsync();
 
         var point = Assert.Single(points);
         Assert.Equal("LP-DEV-01", point.LoadingPoint.Code);
         Assert.Equal(Guid.Parse("00000000-0000-0000-0000-000000000006"), point.LoadingPoint.Id);
+        Assert.True(point.IsFaulted);
     }
 
     private sealed class SqlServerFactAttribute : FactAttribute

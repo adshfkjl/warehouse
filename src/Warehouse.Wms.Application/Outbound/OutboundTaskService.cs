@@ -19,6 +19,23 @@ public interface ILoadingPointCatalog
     Task<IReadOnlyList<OutboundLoadingPoint>> GetAsync(CancellationToken cancellationToken = default);
 }
 
+public interface ILoadingPointRuntimeStatus
+{
+    bool? GetFaulted(Guid loadingPointId);
+}
+
+public sealed class InMemoryLoadingPointRuntimeStatus : ILoadingPointRuntimeStatus
+{
+    private readonly IReadOnlyDictionary<Guid, bool> _faults;
+    public InMemoryLoadingPointRuntimeStatus(IReadOnlyDictionary<Guid, bool>? faults = null) => _faults = faults ?? new Dictionary<Guid, bool>();
+    public bool? GetFaulted(Guid loadingPointId) => _faults.TryGetValue(loadingPointId, out var value) ? value : false;
+}
+
+public sealed class UnknownLoadingPointRuntimeStatus : ILoadingPointRuntimeStatus
+{
+    public bool? GetFaulted(Guid loadingPointId) => null;
+}
+
 public sealed class InMemoryLoadingPointCatalog(IEnumerable<OutboundLoadingPoint> loadingPoints) : ILoadingPointCatalog
 {
     private readonly IReadOnlyList<OutboundLoadingPoint> _loadingPoints = loadingPoints?.ToArray()
