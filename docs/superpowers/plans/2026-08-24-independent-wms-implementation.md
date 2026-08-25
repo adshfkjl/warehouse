@@ -663,13 +663,19 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Test: `tests/Warehouse.Wms.UnitTests/Relocation/RelocationServiceTests.cs`
 - Test: `tests/Warehouse.Wms.IntegrationTests/Relocation/RelocationWorkflowTests.cs`
 
-- [ ] 校验源库位有货、目标库位为空、托盘归属正确、同一设备和资源锁可用。
-- [ ] 目标托盘不是空目标库位的必填条件；跨 PLC/跨巷道能力按现场确认结果实现。
-- [ ] 通过任务调度器提交 `SubmitTransferAsync`，不复制旧代码的 `inShelf` 源库位缺陷。
-- [ ] 设备成功后用单一短事务更新源库位、目标库位、托盘位置和库存流水。
-- [ ] 测试目标占用、源无货、跨设备拒绝、重复移库、失败、未知结果和重启。
+- [x] 校验源库位有货、目标库位为空、托盘归属正确、同一设备和资源锁可用。
+- [x] 目标托盘不是空目标库位的必填条件；跨 PLC/跨巷道能力按现场确认结果保持配置化待确认。
+- [x] 通过任务调度器提交 `SubmitTransferAsync`，不复制旧代码的 `inShelf` 源库位缺陷。
+- [x] 设备成功后用单一短事务更新源库位、目标库位、托盘位置和库存流水。
+- [x] 测试目标占用、源无货、跨设备拒绝、重复移库、失败、未知结果和重启。
 
 **验收:** `AGENT_VERIFIED`；一次移库不产生双占用、丢托盘或重复库存流水。
+
+**Task 5.6 执行证据（2026-08-25）：** 新增 `RelocationOrder`、`RelocationService`、移库 API 和 4 个单元/集成场景。服务校验源库存、目标空位、物料/托盘归属、数量重量和资源冲突，复用阶段 4 调度器提交 `SubmitTransferAsync`；成功结果以幂等 `InventoryService.MoveAsync` 更新源/目标库存流水并释放锁，失败/物理未知保持账面不变和资源锁，重复完成不新增流水。跨 PLC/跨巷道和真实托盘位置更新未凭空实现，保持 `FIELD_PENDING`。
+
+- 自动化状态：`AGENT_VERIFIED`。
+- 外部门禁：`HUMAN_PENDING`（目标托盘和移库完成语义待负责人确认）；`FIELD_PENDING`（真实设备、跨设备能力和账实位置核对未执行）。
+- 旧系统：`warehouse/` 仅作只读参考，未修改。
 
 ## 九、阶段 6：盘点、权限、审计和最小界面
 
