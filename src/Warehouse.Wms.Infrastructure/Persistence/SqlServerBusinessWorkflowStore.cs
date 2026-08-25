@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Warehouse.Wms.Application.Tasks;
 
@@ -39,6 +40,22 @@ public sealed class SqlServerBusinessWorkflowStore(IDbContextFactory<WarehouseDb
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         Validate(snapshot, expectedVersion);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await SaveOnceAsync(snapshot, expectedVersion, reason, operatorId, cancellationToken);
+                return;
+            }
+            catch (Exception exception) when (attempt < 3 && IsTransientConcurrency(exception))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
+            }
+        }
+    }
+
+    private async Task SaveOnceAsync(BusinessWorkflowSnapshot snapshot, int expectedVersion, string? reason, string? operatorId, CancellationToken cancellationToken)
+    {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var type = Require(snapshot.AggregateType, nameof(snapshot.AggregateType));
@@ -138,4 +155,16 @@ public sealed class SqlServerBusinessWorkflowStore(IDbContextFactory<WarehouseDb
     }
     private static string Require(string? value, string parameterName) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("A non-empty value is required.", parameterName) : value.Trim();
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool IsTransientConcurrency(Exception exception)
+    {
+        Exception? current = exception;
+        SqlException? sql = null;
+        while (current is not null)
+        {
+            if (current is SqlException direct) { sql = direct; break; }
+            current = current.InnerException;
+        }
+        return sql is not null && sql.Errors.Cast<SqlError>().Any(error => error.Number is 1205 or 2601 or 2627);
+    }
 }

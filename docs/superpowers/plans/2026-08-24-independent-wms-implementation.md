@@ -1110,7 +1110,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `AGENT_VERIFIED`；SQL 空库迁移、API 组合、完整构建/测试、Docker 重启恢复和移库/盘点业务闭环证据齐全。真实 PLC 和现场账实继续由 `FIELD_PENDING` 门禁管理。
 
-**执行记录（2026-08-26，terra）：** 新增移库和盘点业务快照，保存订单/任务/明细稳定 ID、状态、设备任务号、优先级/尝试次数和资源锁引用；`RelocationService`、`StocktakingService` 支持 `RestoreAsync`，盘点差异与上架预约保存可重放状态；Worker 启动顺序增加移库/盘点恢复，并通过 scoped recovery scope 恢复盘点差异服务，任务缺失快照映射到阻塞门禁。新增移库/盘点恢复单元测试和 Docker SQL 移库重启测试；完整构建 0 警告/0 错误，Unit 139 通过，移库集成 2 通过，SQL 盘点锁释放 1 通过，SQL 业务快照 2 通过，SQL 移库重启 1 通过，EF 模型无待迁移变更。当前仍有风险：业务事实使用通用快照而非独立 EF 表，SQL 同时跨进程调度/业务并发 deadlock 尚未专门验收，真实 PLC/现场账实保持 `FIELD_PENDING`。
+**执行记录（2026-08-26，terra）：** 新增移库和盘点业务快照，保存订单/任务/明细稳定 ID、状态、设备任务号、优先级/尝试次数和资源锁引用；`RelocationService`、`StocktakingService` 支持 `RestoreAsync`，盘点差异与上架预约保存可重放状态；Worker 启动顺序增加移库/盘点恢复，并通过 scoped recovery scope 恢复盘点差异服务，任务缺失快照映射到阻塞门禁。新增移库/盘点恢复单元测试和 Docker SQL 移库重启测试；业务快照 SQL 保存增加 deadlock/唯一键竞争有限重试，并新增跨进程同版本写入测试。完整构建 0 警告/0 错误，Unit 139 通过，移库集成 2 通过，SQL 盘点锁释放 1 通过，SQL 业务快照 3 通过，SQL 移库重启 1 通过，EF 模型无待迁移变更。当前仍有风险：业务事实使用通用快照而非独立 EF 表，真实 PLC/现场账实保持 `FIELD_PENDING`。
 
 ## 十三、阶段门禁和最终标准
 

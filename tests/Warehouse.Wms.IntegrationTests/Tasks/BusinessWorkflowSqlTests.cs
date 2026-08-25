@@ -62,6 +62,42 @@ public sealed class BusinessWorkflowSqlTests
         Assert.Single(restarted.Get(order.OrderNumber).Lines.Single().Receipts);
     }
 
+    [SqlServerFact]
+    public async Task Sql_concurrent_business_writers_allow_only_one_version_commit()
+    {
+        var configured = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configured)
+        {
+            InitialCatalog = $"WmsBusinessConcurrency_{Guid.NewGuid():N}"
+        };
+        var options = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options;
+        await using var factory = new TestDbContextFactory(options);
+        await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+
+        var first = new SqlServerBusinessWorkflowStore(factory);
+        await first.SaveAsync(new BusinessWorkflowSnapshot("Relocation", "REL-CONCURRENT", 1, "Queued", "{\"v\":1}", DateTimeOffset.UtcNow), 0);
+        var candidate = new BusinessWorkflowSnapshot("Relocation", "REL-CONCURRENT", 2, "Executing", "{\"v\":2}", DateTimeOffset.UtcNow);
+        var attempts = await Task.WhenAll(
+            TrySaveAsync(new SqlServerBusinessWorkflowStore(factory), candidate),
+            TrySaveAsync(new SqlServerBusinessWorkflowStore(factory), candidate));
+
+        Assert.Equal(1, attempts.Count(result => result));
+        Assert.Equal(1, attempts.Count(result => !result));
+    }
+
+    private static async Task<bool> TrySaveAsync(SqlServerBusinessWorkflowStore store, BusinessWorkflowSnapshot snapshot)
+    {
+        try
+        {
+            await store.SaveAsync(snapshot, 1);
+            return true;
+        }
+        catch (BusinessWorkflowConcurrencyException)
+        {
+            return false;
+        }
+    }
+
     private sealed class SqlServerFactAttribute : FactAttribute
     {
         public SqlServerFactAttribute()
