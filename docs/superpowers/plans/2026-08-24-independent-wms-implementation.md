@@ -491,14 +491,16 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Test: `tests/Warehouse.Wms.UnitTests/Tasks/TaskCancellationTests.cs`
 - Test: `tests/Warehouse.Wms.UnitTests/Authorization/FakeRiskAuthorizationServiceTests.cs`
 
-- [ ] `Created/Allocated/Queued` 只能取消未下发任务并释放资源。
-- [ ] `SentToPlc/Executing` 只能提交停止请求，等待 `StopConfirmed`、`StopFailed` 或 `PhysicalStateUnknown`。
-- [ ] `PhysicalStateUnknown` 不得直接释放库位、托盘和库存锁。
-- [ ] 将“人工完成”命名为“人工确认物理结果并结案”，强制调用 `IRiskAuthorizationService` 二次授权，并填写原因、设备状态、托盘实际位置、源/目标库位核对和库存校正流水。
-- [ ] 先用测试实现提供 `ICurrentUser` 和 `IRiskAuthorizationService`；Task 6.3 再接入真实用户、角色和 JWT，不得因此跳过权限校验。
-- [ ] 测试取消竞态、停止失败、人工确认缺字段和重复确认。
+- [x] `Created/Allocated/Queued` 只能取消未下发任务并释放资源；`Dispatching` 仅在设备调用尚未开始时回到 `Queued`。
+- [x] `SentToPlc/Executing` 只能提交停止请求，等待 `StopConfirmed`、`StopFailed` 或 `PhysicalStateUnknown`。
+- [x] `PhysicalStateUnknown` 不得直接释放库位、托盘和库存锁。
+- [x] 将“人工完成”命名为“人工确认物理结果并结案”，强制调用 `IRiskAuthorizationService` 二次授权，并填写原因、设备状态、托盘实际位置、源/目标库位核对和库存校正流水。
+- [x] 先用测试实现提供 `ICurrentUser` 和 `IRiskAuthorizationService`；Task 6.3 再接入真实用户、角色和 JWT，不得因此跳过权限校验。
+- [x] 测试取消竞态、停止失败、人工确认缺字段和重复确认。
 
 **验收:** `AGENT_VERIFIED`；人工结案不是简单把状态改为 `Succeeded`，并能完整审计。
+
+**Task 4.4 执行证据（2026-08-25）：** 新增取消/停止服务、物理结果确认服务、当前用户和二次授权契约；WMS 单元测试 12 个 Task 4.4 用例通过，全单元测试 44 个通过，解决方案构建 0 警告/0 错误。停止响应增加设备任务幂等键校验，不匹配时进入物理未知。当前仍未接入持久化资源锁释放实现、真实用户/JWT 或现场 PLC 停止确认，分别留待后续基础设施、权限和现场门禁。
 
 ### Task 4.5：异常工作项和处置中心
 

@@ -6,9 +6,9 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 词典版本 | `0.7` |
-| 对应设计书 | `PROJECT_DESIGN.md` 版本 `2.0` |
-| 自动化状态 | `AGENT_VERIFIED`（Task 4.3 调度、结果处理和恢复测试已通过） |
+| 词典版本 | `0.9` |
+| 对应设计书 | `PROJECT_DESIGN.md` 版本 `2.2` |
+| 自动化状态 | `AGENT_VERIFIED`（Task 4.4 取消、停止和人工结案测试已通过） |
 | 业务确认 | `HUMAN_PENDING` |
 | 现场设备确认 | `FIELD_PENDING` |
 
@@ -23,6 +23,14 @@
 5. `ManualIntervention` 表示进入人工处置，不等于成功。只有填写物理位置、托盘、源/目标库位、设备状态、原因并通过二次授权后，才能产生“人工确认物理结果并结案”的专用操作。
 6. `Succeeded` 只能由设备结果和业务提交事务共同证明；不能由接口 HTTP 200、寄存器写入成功或人工按钮单独产生。
 7. `Exception` 是业务单据的异常态；设备任务的物理未知和人工处置仍使用独立状态，并关联异常工作项。
+
+Task 4.4 的操作约束：
+
+- 未下发任务取消只允许 `Created`、`Allocated`、`Queued`；`Dispatching` 只有在设备调用尚未开始时回到 `Queued`。调用已开始的 `Dispatching` 不得假设未发送。
+- `SentToPlc`/`Executing` 必须经过 `CancelRequested` -> `StopRequested`；`StopConfirmed` 后才可进入 `Canceled` 和释放调度资源，`StopFailed` 不释放资源，未知停止结果进入 `PhysicalStateUnknown`。
+- `PhysicalStateUnknown` 不接受普通取消，也不触发资源释放、库存提交或自动重试。
+- 停止响应必须匹配原设备任务幂等键；不匹配的停止结果进入 `PhysicalStateUnknown`，不得将其视为 `StopConfirmed` 或释放资源。
+- 人工操作的正式名称为“人工确认物理结果并结案”。请求必须包含原因、设备状态、托盘实际位置、源/目标库位和库存校正流水（流水号、物料、数量、单位、前后位置和原因），并通过当前用户和风险授权服务的二次授权。确认后状态为 `ManualIntervention`，同一任务不能重复确认。
 
 ## 3. 入库单状态
 

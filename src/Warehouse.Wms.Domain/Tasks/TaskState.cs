@@ -28,7 +28,7 @@ internal static class TaskStateTransitions
             [TaskState.Created] = States(TaskState.Allocated, TaskState.Canceled),
             [TaskState.Allocated] = States(TaskState.Queued, TaskState.Canceled),
             [TaskState.Queued] = States(TaskState.Dispatching, TaskState.Failed, TaskState.Canceled),
-            [TaskState.Dispatching] = States(TaskState.Queued, TaskState.SentToPlc, TaskState.Failed, TaskState.TimedOut, TaskState.Canceled),
+            [TaskState.Dispatching] = States(TaskState.Queued, TaskState.SentToPlc, TaskState.Failed, TaskState.TimedOut),
             [TaskState.SentToPlc] = States(
                 TaskState.Executing, TaskState.Failed, TaskState.TimedOut,
                 TaskState.CancelRequested, TaskState.StopRequested, TaskState.PhysicalStateUnknown),
