@@ -1061,7 +1061,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 ### Task 9.6：任务持久化运行时接入和重启恢复 Worker
 
-**前置条件:** Task 9.5 已达到 `AGENT_VERIFIED`；不得连接生产 PLC/数据库。
+**前置条件:** Task 9.5 已达到 `AGENT_VERIFIED`；不得连接生产 PLC/数据库；Task 9.5 的提交当前已记录为 `PUSH_PENDING`，不影响本地继续执行。
 
 **目标:** 将 `TaskScheduler`、入库/出库/移库/盘点业务服务的任务创建、状态迁移、幂等登记和资源锁操作接入 `ITaskPersistenceStore`/`IResourceLockStore`，并实现服务重启后从 SQL 恢复未完成任务而不重复下发设备命令。
 
