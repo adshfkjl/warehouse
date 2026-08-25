@@ -147,7 +147,7 @@ public sealed class SpreadsheetImportTests
     }
 
     [Fact]
-    public async Task A_rejected_workbook_can_be_corrected_and_retried_with_the_same_source_key()
+    public async Task Rejected_workbook_can_be_corrected_and_retried_with_the_same_source_key()
     {
         var inbound = new InboundOrderService();
         var outbound = new OutboundAllocationService(new InventoryService());
