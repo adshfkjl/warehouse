@@ -15,23 +15,23 @@ public sealed class RolesController(IIdentityService identity) : ControllerBase
     public ActionResult<IReadOnlyCollection<RoleDefinition>> List() => Ok(_identity.Roles);
 
     [HttpPost]
-    public IActionResult Create(RoleRequest request)
+    public async Task<IActionResult> Create(RoleRequest request, CancellationToken cancellationToken)
     {
-        _identity.CreateRole(request.Name);
+        await _identity.CreateRoleAsync(request.Name, cancellationToken);
         return Accepted(new { request.Name });
     }
 
     [HttpPost("{roleName}/permissions")]
-    public IActionResult GrantPermission(string roleName, PermissionRequest request)
+    public async Task<IActionResult> GrantPermission(string roleName, PermissionRequest request, CancellationToken cancellationToken)
     {
-        _identity.GrantPermission(roleName, request.Permission);
+        await _identity.GrantPermissionAsync(roleName, request.Permission, cancellationToken);
         return NoContent();
     }
 
     [HttpPost("{roleName}/users/{userId}")]
-    public IActionResult AssignRole(string roleName, string userId)
+    public async Task<IActionResult> AssignRole(string roleName, string userId, CancellationToken cancellationToken)
     {
-        _identity.AssignRole(userId, roleName);
+        await _identity.AssignRoleAsync(userId, roleName, cancellationToken);
         return NoContent();
     }
 }

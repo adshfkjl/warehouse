@@ -33,10 +33,27 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<StatisticsTrendEntity> StatisticsTrends => Set<StatisticsTrendEntity>();
     public DbSet<StatisticsTaskStateEntity> StatisticsTaskStates => Set<StatisticsTaskStateEntity>();
     public DbSet<PointSnapshotEntity> PointSnapshots => Set<PointSnapshotEntity>();
+    public DbSet<IdentityUserEntity> IdentityUsers => Set<IdentityUserEntity>();
+    public DbSet<IdentityRoleEntity> IdentityRoles => Set<IdentityRoleEntity>();
+    public DbSet<IdentityUserRoleEntity> IdentityUserRoles => Set<IdentityUserRoleEntity>();
+    public DbSet<IdentityRolePermissionEntity> IdentityRolePermissions => Set<IdentityRolePermissionEntity>();
+    public DbSet<IdentityWarehouseScopeEntity> IdentityWarehouseScopes => Set<IdentityWarehouseScopeEntity>();
+    public DbSet<IdentityRefreshTokenEntity> IdentityRefreshTokens => Set<IdentityRefreshTokenEntity>();
+    public DbSet<IdentityAuditEntity> IdentityAudits => Set<IdentityAuditEntity>();
+    public DbSet<IdentityBootstrapMarkerEntity> IdentityBootstrapMarkers => Set<IdentityBootstrapMarkerEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<IdentityUserEntity>(entity => { entity.ToTable("IdentityUsers"); entity.HasKey(x => x.Id); entity.Property(x => x.UserId).HasMaxLength(128).IsRequired(); entity.Property(x => x.NormalizedUserId).HasMaxLength(128).IsRequired(); entity.Property(x => x.DisplayName).HasMaxLength(200).IsRequired(); entity.Property(x => x.PasswordHash).HasMaxLength(512).IsRequired(); entity.Property(x => x.Version).IsRowVersion(); entity.HasIndex(x => x.NormalizedUserId).IsUnique(); });
+        modelBuilder.Entity<IdentityRoleEntity>(entity => { entity.ToTable("IdentityRoles"); entity.HasKey(x => x.Id); entity.Property(x => x.Name).HasMaxLength(128).IsRequired(); entity.Property(x => x.NormalizedName).HasMaxLength(128).IsRequired(); entity.HasIndex(x => x.NormalizedName).IsUnique(); });
+        modelBuilder.Entity<IdentityUserRoleEntity>(entity => { entity.ToTable("IdentityUserRoles"); entity.HasKey(x => new { x.UserId, x.RoleId }); entity.HasOne<IdentityUserEntity>().WithMany(x => x.Roles).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); entity.HasOne<IdentityRoleEntity>().WithMany().HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade); });
+        modelBuilder.Entity<IdentityRolePermissionEntity>(entity => { entity.ToTable("IdentityRolePermissions"); entity.HasKey(x => x.Id); entity.Property(x => x.Permission).HasMaxLength(256).IsRequired(); entity.Property(x => x.NormalizedPermission).HasMaxLength(256).IsRequired(); entity.HasIndex(x => new { x.RoleId, x.NormalizedPermission }).IsUnique(); entity.HasOne<IdentityRoleEntity>().WithMany(x => x.Permissions).HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade); });
+        modelBuilder.Entity<IdentityWarehouseScopeEntity>(entity => { entity.ToTable("IdentityWarehouseScopes"); entity.HasKey(x => x.Id); entity.Property(x => x.WarehouseId).HasMaxLength(128).IsRequired(); entity.Property(x => x.NormalizedWarehouseId).HasMaxLength(128).IsRequired(); entity.HasIndex(x => new { x.UserId, x.NormalizedWarehouseId }).IsUnique(); entity.HasOne<IdentityUserEntity>().WithMany(x => x.WarehouseScopes).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
+        modelBuilder.Entity<IdentityRefreshTokenEntity>(entity => { entity.ToTable("IdentityRefreshTokens"); entity.HasKey(x => x.Id); entity.Property(x => x.TokenHash).HasMaxLength(128).IsRequired(); entity.Property(x => x.Version).IsRowVersion(); entity.HasIndex(x => x.TokenHash).IsUnique(); entity.HasIndex(x => new { x.FamilyId, x.RevokedAt }); entity.HasIndex(x => new { x.UserId, x.RevokedAt, x.ExpiresAt }); entity.HasOne<IdentityUserEntity>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
+        modelBuilder.Entity<IdentityAuditEntity>(entity => { entity.ToTable("IdentityAudits"); entity.HasKey(x => x.Id); entity.Property(x => x.Action).HasConversion<string>().HasMaxLength(64).IsRequired(); entity.Property(x => x.UserId).HasMaxLength(128).IsRequired(); entity.Property(x => x.Target).HasMaxLength(256).IsRequired(); entity.Property(x => x.Reason).HasMaxLength(1000).IsRequired(); entity.Property(x => x.CorrelationId).HasMaxLength(64).IsRequired(); entity.HasIndex(x => new { x.OccurredAt, x.Id }); entity.HasIndex(x => new { x.UserId, x.OccurredAt }); });
+        modelBuilder.Entity<IdentityBootstrapMarkerEntity>(entity => { entity.ToTable("IdentityBootstrapMarkers"); entity.HasKey(x => x.Name); entity.Property(x => x.Name).HasMaxLength(64); });
 
         modelBuilder.Entity<WarehouseEntity>(entity =>
         {

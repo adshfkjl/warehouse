@@ -1355,16 +1355,16 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **测试：** 服务重启后用户/角色仍可登录；重复刷新和旧令牌重放被拒绝；注销和账号禁用立即生效；并发刷新只有一个新令牌有效；高风险授权和审计记录可追溯；生产密钥门禁启动失败；Docker SQL 迁移可重复执行。
 
-- [ ] 测试初始管理员一次性创建、已有管理员拒绝重复初始化、无默认密码和安全密码输入。
-- [ ] 测试脚本无法读取刷新 Cookie、退出后 Cookie/服务端令牌失效、旧刷新令牌重放失败。
-- [ ] 为登录失败增加基本限流或账号失败锁定，并测试达到阈值后的拒绝和恢复策略。
-- [ ] 将用户、角色、权限、仓库范围、令牌摘要和追加式审计全部注册为 SQL 持久化实体，禁止生产隐式回退 InMemory。
-- [ ] 以短期内存访问令牌和 HttpOnly 刷新 Cookie 完成登录、刷新、退出和账号禁用流程。
-- [ ] 在生产配置下拒绝缺失、过短或开发默认 JWT 密钥。
+- [x] 测试初始管理员一次性创建、已有管理员拒绝重复初始化、无默认密码和安全密码输入。
+- [x] 测试脚本无法读取刷新 Cookie、退出后 Cookie/服务端令牌失效、旧刷新令牌重放失败。
+- [x] 为登录失败增加基本限流或账号失败锁定，并测试达到阈值后的拒绝和恢复策略。
+- [x] 将用户、角色、权限、仓库范围、令牌摘要和追加式审计全部注册为 SQL 持久化实体，禁止生产隐式回退 InMemory。
+- [x] 以短期内存访问令牌和 HttpOnly 刷新 Cookie 完成登录、刷新、退出和账号禁用流程。
+- [x] 在生产配置下拒绝缺失、过短或开发默认 JWT 密钥。
 
 **验收：** `AGENT_VERIFIED`；不得以 InMemory 身份/审计实现作为生产完成证据。角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
 
-**执行记录：** Task 执行后填写迁移、管理员初始化方式、Cookie 属性、限流策略、测试结果和门禁状态；未执行前状态为 `PENDING`。
+**执行记录（2026-08-27）：** SQL 身份实体和两段迁移保存 PBKDF2-SHA256 envelope、安全版本/rowversion、规范化唯一键、登录锁定、令牌 family parent/replaced-by/replay 状态及 actor/target/correlation 审计。`sp_getapplock` 按用户和 refresh 摘要建立统一锁序，真实 SQL 验证 16 并发 refresh 仅一个 successor，refresh 与 disable/改密/角色变更和 login 与 disable 最终均使 access/refresh 失效；`TimeProvider` 锁定重启持久和到期恢复通过。Cookie HTTP 验证不返回 refresh JSON、`HttpOnly; Secure; SameSite=Strict; Path=/api/users`、Origin 拒绝、轮换、无 access logout 清 Cookie 与 `Cache-Control: no-store`。bootstrap 双竞争仅一方成功，永久 marker、Admin 仓库 scope 和三项高风险权限写入同一事务；重定向和 `--password` 均拒绝且不启动 HTTP/Worker。Production 组合拒绝缺失/空白/31 字符/精确开发默认 key，接受含普通 `development` 字样但不同的强 key，并只注册 SQL identity/audit。迁移空库两次执行和 pending model 均已实际验证；审计 trigger 拒绝 SQL UPDATE/DELETE，稳定分页以 occurredAt/Id 排序。自动化状态：`AGENT_VERIFIED`；角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
 
 ### Task 9.14：异常工作项与 Excel 导入幂等持久化
 

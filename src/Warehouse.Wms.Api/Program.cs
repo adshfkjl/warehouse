@@ -28,6 +28,13 @@ using Warehouse.Wms.Infrastructure.Background;
 
 using WmsTaskScheduler = Warehouse.Wms.Application.Tasks.TaskScheduler;
 
+if (args.Length > 0 && string.Equals(args[0], "identity", StringComparison.OrdinalIgnoreCase))
+{
+    Environment.ExitCode = await IdentityBootstrapCommand.RunAsync(args);
+    return;
+}
+
+const string DevelopmentJwtSigningKey = "development-only-signing-key-at-least-32-characters-long";
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
@@ -170,19 +177,37 @@ builder.Services.AddSingleton<IIntegrationCommandService>(sp =>
         sp.GetRequiredService<IIntegrationOutbox>(),
         builder.Configuration.GetValue("Wms:ExternalIntegrationsEnabled", false)));
 
-var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
+var configuredJwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>();
+if (builder.Environment.IsProduction() && configuredJwtOptions is null)
+    throw new InvalidOperationException("Jwt configuration is required in Production.");
+var jwtOptions = configuredJwtOptions
     ?? new JwtOptions(
         "warehouse-development",
         "warehouse-development",
-        "development-only-signing-key-at-least-32-characters-long",
+        DevelopmentJwtSigningKey,
         TimeSpan.FromMinutes(15),
         TimeSpan.FromDays(1));
 jwtOptions.Validate();
+if (builder.Environment.IsProduction() && string.Equals(jwtOptions.SigningKey, DevelopmentJwtSigningKey, StringComparison.Ordinal))
+    throw new InvalidOperationException("Production JWT signing key cannot use the development default.");
 
-builder.Services.AddSingleton<IAuditLog, InMemoryAuditLog>();
-builder.Services.AddSingleton<IIdentityService>(sp => new InMemoryIdentityService(
-    jwtOptions,
-    sp.GetRequiredService<IAuditLog>()));
+if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<SqlServerIdentityService>(sp => new SqlServerIdentityService(
+        sp.GetRequiredService<IDbContextFactory<WarehouseDbContext>>(),
+        jwtOptions,
+        builder.Configuration.GetSection("IdentitySecurity").Get<IdentitySecurityOptions>() ?? IdentitySecurityOptions.Default,
+        TimeProvider.System));
+    builder.Services.AddSingleton<IIdentityService>(sp => sp.GetRequiredService<SqlServerIdentityService>());
+    builder.Services.AddSingleton<IAuditLog>(sp => sp.GetRequiredService<SqlServerIdentityService>());
+    builder.Services.AddSingleton<IIdentitySecurityValidator>(sp => sp.GetRequiredService<SqlServerIdentityService>());
+}
+else
+{
+    builder.Services.AddSingleton<IAuditLog, InMemoryAuditLog>();
+    builder.Services.AddSingleton<IIdentityService>(sp => new InMemoryIdentityService(jwtOptions, sp.GetRequiredService<IAuditLog>()));
+    builder.Services.AddSingleton<IIdentitySecurityValidator>(sp => (IIdentitySecurityValidator)sp.GetRequiredService<IIdentityService>());
+}
 builder.Services.AddSingleton<IRiskAuthorizationService>(sp => sp.GetRequiredService<IIdentityService>());
 builder.Services.AddScoped<HttpCurrentUserAccessor>();
 builder.Services.AddScoped<ICurrentUser>(sp => sp.GetRequiredService<HttpCurrentUserAccessor>());
@@ -200,6 +225,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(15)
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                var version = context.Principal?.FindFirst("security_version")?.Value;
+                if (string.IsNullOrWhiteSpace(userId) || !long.TryParse(version, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var securityVersion)
+                    || !await context.HttpContext.RequestServices.GetRequiredService<IIdentitySecurityValidator>().IsAccessTokenCurrentAsync(userId, securityVersion, context.HttpContext.RequestAborted))
+                    context.Fail("The access token is no longer valid.");
+            }
         };
     });
 builder.Services.AddAuthorization();

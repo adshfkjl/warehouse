@@ -36,6 +36,31 @@ public sealed record TokenPair(
     DateTimeOffset AccessTokenExpiresAt,
     DateTimeOffset RefreshTokenExpiresAt);
 
+public sealed record AccessTokenResponse(
+    string UserId,
+    string AccessToken,
+    DateTimeOffset AccessTokenExpiresAt);
+
+public sealed record IdentitySecurityOptions(
+    int FailedLoginThreshold,
+    TimeSpan FailedLoginWindow,
+    TimeSpan LockoutDuration)
+{
+    public static IdentitySecurityOptions Default { get; } = new(5, TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(15));
+
+    public void Validate()
+    {
+        if (FailedLoginThreshold < 1) throw new ArgumentOutOfRangeException(nameof(FailedLoginThreshold));
+        if (FailedLoginWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(FailedLoginWindow));
+        if (LockoutDuration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(LockoutDuration));
+    }
+}
+
+public interface IIdentitySecurityValidator
+{
+    Task<bool> IsAccessTokenCurrentAsync(string userId, long securityVersion, CancellationToken cancellationToken = default);
+}
+
 public sealed record RoleDefinition(string Name, IReadOnlySet<string> Permissions);
 
 public interface IWarehouseScopedCurrentUser : ICurrentUser
@@ -49,6 +74,7 @@ public sealed record AuthenticatedCurrentUser(
 
 public enum IdentityAuditAction
 {
+    UserCreated,
     Login,
     Refresh,
     Logout,
@@ -58,7 +84,9 @@ public enum IdentityAuditAction
     RoleAssigned,
     PermissionGranted,
     HighRiskAuthorization,
-    DeviceTask
+    DeviceTask,
+    AccountLocked,
+    AccountUnlocked
 }
 
 public sealed record IdentityAuditEntry(
@@ -79,6 +107,13 @@ public interface IAuditLog
         string target,
         bool succeeded,
         string reason);
+
+    Task RecordAsync(IdentityAuditAction action, string userId, string target, bool succeeded, string reason, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Record(action, userId, target, succeeded, reason);
+        return Task.CompletedTask;
+    }
 }
 
 public sealed class InMemoryAuditLog : IAuditLog
@@ -136,4 +171,46 @@ public interface IIdentityService : IRiskAuthorizationService
     AuthenticatedCurrentUser GetCurrentUser(string userId);
 
     void RecordDeviceTaskAudit(string userId, string taskNumber, string reason, bool succeeded = true);
+
+    Task CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CreateUser(request);
+        return Task.CompletedTask;
+    }
+
+    Task CreateRoleAsync(string roleName, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CreateRole(roleName);
+        return Task.CompletedTask;
+    }
+
+    Task AssignRoleAsync(string userId, string roleName, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        AssignRole(userId, roleName);
+        return Task.CompletedTask;
+    }
+
+    Task GrantPermissionAsync(string roleName, string permission, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GrantPermission(roleName, permission);
+        return Task.CompletedTask;
+    }
+
+    Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ChangePassword(userId, currentPassword, newPassword);
+        return Task.CompletedTask;
+    }
+
+    Task DisableUserAsync(string userId, string reason, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        DisableUser(userId, reason);
+        return Task.CompletedTask;
+    }
 }

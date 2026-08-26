@@ -7,7 +7,7 @@ using Warehouse.Wms.Application.Authorization;
 
 namespace Warehouse.Wms.Application.Identity;
 
-public sealed class InMemoryIdentityService : IIdentityService
+public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurityValidator
 {
     private readonly JwtOptions _options;
     private readonly IAuditLog _audit;
@@ -80,6 +80,7 @@ public sealed class InMemoryIdentityService : IIdentityService
             if (!_users.TryGetValue(normalizedUser, out var user)) throw new KeyNotFoundException($"User '{normalizedUser}' was not found.");
             if (!_roles.ContainsKey(normalizedRole)) throw new KeyNotFoundException($"Role '{normalizedRole}' was not found.");
             user.Roles.Add(normalizedRole);
+            user.SecurityVersion++;
             user.RevokeAllRefreshTokens();
         }
 
@@ -94,6 +95,7 @@ public sealed class InMemoryIdentityService : IIdentityService
         {
             if (!_roles.TryGetValue(normalizedRole, out var role)) throw new KeyNotFoundException($"Role '{normalizedRole}' was not found.");
             role.Permissions.Add(normalizedPermission);
+            foreach (var account in _users.Values.Where(account => account.Roles.Contains(normalizedRole))) account.SecurityVersion++;
         }
 
         _audit.Record(IdentityAuditAction.PermissionGranted, "system", normalizedRole, true, normalizedPermission);
@@ -169,6 +171,7 @@ public sealed class InMemoryIdentityService : IIdentityService
             }
 
             user.PasswordHash = HashPassword(newPassword);
+            user.SecurityVersion++;
             user.RevokeAllRefreshTokens();
         }
 
@@ -183,6 +186,7 @@ public sealed class InMemoryIdentityService : IIdentityService
         {
             if (!_users.TryGetValue(normalized, out var user)) throw new KeyNotFoundException($"User '{normalized}' was not found.");
             user.Disabled = true;
+            user.SecurityVersion++;
             user.RevokeAllRefreshTokens();
         }
 
@@ -226,6 +230,15 @@ public sealed class InMemoryIdentityService : IIdentityService
         return Task.FromResult(allowed);
     }
 
+    public Task<bool> IsAccessTokenCurrentAsync(string userId, long securityVersion, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            return Task.FromResult(_users.TryGetValue(Require(userId, nameof(userId)), out var user) && !user.Disabled && user.SecurityVersion == securityVersion);
+        }
+    }
+
     public void RecordDeviceTaskAudit(string userId, string taskNumber, string reason, bool succeeded = true)
         => _audit.Record(IdentityAuditAction.DeviceTask, Require(userId, nameof(userId)), Require(taskNumber, nameof(taskNumber)), succeeded, Require(reason, nameof(reason)));
 
@@ -242,6 +255,7 @@ public sealed class InMemoryIdentityService : IIdentityService
             new(JwtRegisteredClaimNames.Sub, user.UserId),
             new(ClaimTypes.NameIdentifier, user.UserId),
             new(ClaimTypes.Name, user.UserId),
+            new("security_version", user.SecurityVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
         claims.AddRange(user.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
@@ -332,6 +346,7 @@ public sealed class InMemoryIdentityService : IIdentityService
         public string DisplayName { get; } = displayName;
         public string PasswordHash { get; set; } = passwordHash;
         public bool Disabled { get; set; }
+        public long SecurityVersion { get; set; } = 1;
         public HashSet<string> Roles { get; } = roles.ToHashSet(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> WarehouseIds { get; } = warehouseIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, RefreshTokenRecord> RefreshTokens { get; } = new(StringComparer.Ordinal);

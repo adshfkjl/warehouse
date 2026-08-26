@@ -12,51 +12,100 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
 
     [AllowAnonymous]
     [HttpPost("login")]
-    public async Task<ActionResult<TokenPair>> Login(LoginRequest request, CancellationToken cancellationToken)
-        => Ok(await _identity.LoginAsync(request, cancellationToken));
+    public async Task<ActionResult<AccessTokenResponse>> Login(LoginRequest request, CancellationToken cancellationToken)
+    {
+        var tokens = await _identity.LoginAsync(request, cancellationToken);
+        SetRefreshCookie(tokens);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new AccessTokenResponse(tokens.UserId, tokens.AccessToken, tokens.AccessTokenExpiresAt));
+    }
 
     [AllowAnonymous]
     [HttpPost("refresh")]
-    public async Task<ActionResult<TokenPair>> Refresh(RefreshRequest request, CancellationToken cancellationToken)
-        => Ok(await _identity.RefreshAsync(request.RefreshToken, cancellationToken));
-
-    [Authorize]
-    [HttpPost("logout")]
-    public async Task<IActionResult> Logout(RefreshRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AccessTokenResponse>> Refresh(CancellationToken cancellationToken)
     {
-        await _identity.LogoutAsync(request.RefreshToken, cancellationToken);
+        EnsureSameOrigin();
+        var refreshToken = Request.Cookies[RefreshCookieName] ?? throw new UnauthorizedAccessException("Invalid refresh token.");
+        var tokens = await _identity.RefreshAsync(refreshToken, cancellationToken);
+        SetRefreshCookie(tokens);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new AccessTokenResponse(tokens.UserId, tokens.AccessToken, tokens.AccessTokenExpiresAt));
+    }
+
+    [AllowAnonymous]
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken)
+    {
+        DeleteRefreshCookie();
+        EnsureSameOrigin();
+        var refreshToken = Request.Cookies[RefreshCookieName];
+        if (!string.IsNullOrWhiteSpace(refreshToken))
+        {
+            try { await _identity.LogoutAsync(refreshToken, cancellationToken); }
+            catch (UnauthorizedAccessException) { }
+        }
+        Response.Headers.CacheControl = "no-store";
         return NoContent();
     }
 
     [Authorize(Roles = "Admin")]
     [HttpPost]
-    public IActionResult Create(CreateUserRequest request)
+    public async Task<IActionResult> Create(CreateUserRequest request, CancellationToken cancellationToken)
     {
-        _identity.CreateUser(request);
+        await _identity.CreateUserAsync(request, cancellationToken);
         return Accepted(new { request.UserId });
     }
 
     [Authorize(Roles = "Admin")]
     [HttpPost("{userId}/disable")]
-    public IActionResult Disable(string userId, DisableUserRequest request)
+    public async Task<IActionResult> Disable(string userId, DisableUserRequest request, CancellationToken cancellationToken)
     {
-        _identity.DisableUser(userId, request.Reason);
+        await _identity.DisableUserAsync(userId, request.Reason, cancellationToken);
         return NoContent();
     }
 
     [Authorize]
     [HttpPost("{userId}/password")]
-    public IActionResult ChangePassword(string userId, ChangePasswordRequest request)
+    public async Task<IActionResult> ChangePassword(string userId, ChangePasswordRequest request, CancellationToken cancellationToken)
     {
         var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         if (!string.Equals(currentUserId, userId, StringComparison.OrdinalIgnoreCase) && !User.IsInRole("Admin"))
             return Forbid();
 
-        _identity.ChangePassword(userId, request.CurrentPassword, request.NewPassword);
+        await _identity.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword, cancellationToken);
         return NoContent();
+    }
+
+    private const string RefreshCookieName = "wms_refresh";
+
+    private void SetRefreshCookie(TokenPair tokens)
+        => Response.Cookies.Append(RefreshCookieName, tokens.RefreshToken, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Path = "/api/users",
+            Expires = tokens.RefreshTokenExpiresAt
+        });
+
+    private void DeleteRefreshCookie()
+        => Response.Cookies.Delete(RefreshCookieName, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Path = "/api/users"
+        });
+
+    private void EnsureSameOrigin()
+    {
+        var origin = Request.Headers.Origin.ToString();
+        if (string.IsNullOrWhiteSpace(origin)) return;
+        var expected = $"{Request.Scheme}://{Request.Host}";
+        if (!string.Equals(origin, expected, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Cross-origin credential request is not allowed.");
     }
 }
 
-public sealed record RefreshRequest(string RefreshToken);
 public sealed record DisableUserRequest(string Reason);
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);

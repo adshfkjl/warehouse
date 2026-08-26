@@ -69,6 +69,16 @@ docker compose -f docker-compose.dev.yml down -v
 
 Task 3.1 已包含 `src/Warehouse.Wms.Infrastructure/Migrations/` 首个基础资料迁移。验证脚本会检查迁移目录；执行数据库更新仍需要本地 Docker SQL Server、可用的 `dotnet-ef` 和开发连接串。缺少这些条件时必须标记为 `BLOCKED`，不得通过创建空迁移或跳过实际迁移执行伪造成功。
 
+## 身份管理员初始化
+
+SQL 模式的空库不提供默认管理员或参数密码。完成迁移后，只能在交互式本地控制台执行一次：
+
+```powershell
+dotnet run --project src/Warehouse.Wms.Api -- identity create-admin --username admin --warehouse WH-01
+```
+
+命令会隐藏输入并要求两次确认密码；拒绝重定向输入和 `--password` 参数。已有管理员或 bootstrap 标记时退出失败，且不会启动 HTTP 服务或后台 Worker。生产环境同时必须设置 `Wms__PersistenceMode=SqlServer`、`ConnectionStrings__WmsDb` 和至少 32 字符、非开发默认值的 `Jwt__SigningKey`。
+
 ## 健康检查
 
 启动 API（不需要数据库、PLC 或 ERP）：
