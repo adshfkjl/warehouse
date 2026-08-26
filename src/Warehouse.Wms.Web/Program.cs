@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Net;
 using System.Text.Json;
 using Warehouse.Wms.Web;
 using Yarp.ReverseProxy.Configuration;
@@ -113,7 +114,7 @@ namespace Warehouse.Wms.Web
                 throw new InvalidOperationException($"{upstreamKey} cannot use the development default in production.");
             }
 
-            if (environment.IsProduction() && upstream.IsLoopback && !configuration.GetValue<bool>("ApiProxy:AllowLoopbackUpstream"))
+            if (environment.IsProduction() && IsLoopbackHost(upstream.Host) && !configuration.GetValue<bool>("ApiProxy:AllowLoopbackUpstream"))
             {
                 throw new InvalidOperationException("A loopback API upstream requires ApiProxy:AllowLoopbackUpstream=true in production.");
             }
@@ -125,6 +126,13 @@ namespace Warehouse.Wms.Web
             }
 
             return new ApiProxyConfiguration(upstream, TimeSpan.FromSeconds(timeoutSeconds));
+        }
+
+        private static bool IsLoopbackHost(string host)
+        {
+            var normalizedHost = host.TrimEnd('.');
+            return string.Equals(normalizedHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                || (IPAddress.TryParse(normalizedHost, out var address) && IPAddress.IsLoopback(address));
         }
     }
 

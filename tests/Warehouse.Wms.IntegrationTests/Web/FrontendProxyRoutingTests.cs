@@ -1,9 +1,12 @@
 extern alias warehouseWeb;
 
 using System.Text.RegularExpressions;
+using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using WebProxySettings = warehouseWeb::Warehouse.Wms.Web.ApiProxySettings;
 
 namespace Warehouse.Wms.IntegrationTests.Web;
@@ -58,8 +61,11 @@ public sealed class FrontendProxyRoutingTests
     [Theory]
     [InlineData(null, false, "production")]
     [InlineData("http://localhost:5054/", false, "production")]
+    [InlineData("http://localhost.:5054/", false, "production")]
+    [InlineData("http://LOCALHOST.:5054/", false, "production")]
     [InlineData("ftp://api.example.test/", false, "production")]
     [InlineData("http://127.0.0.1:5054/", false, "production")]
+    [InlineData("http://[::1]:5054/", false, "production")]
     public void Production_rejects_untrusted_upstream_configuration(string? upstream, bool allowLoopback, string environmentName)
     {
         var values = new Dictionary<string, string?>
@@ -73,18 +79,70 @@ public sealed class FrontendProxyRoutingTests
         Assert.Throws<InvalidOperationException>(() => WebProxySettings.Validate(configuration, new TestHostEnvironment(environmentName)));
     }
 
-    [Fact]
-    public void Production_allows_explicitly_approved_loopback_upstream()
+    [Theory]
+    [InlineData("http://localhost.:5054/")]
+    [InlineData("http://LOCALHOST.:5054/")]
+    [InlineData("http://127.0.0.1:5054/")]
+    [InlineData("http://[::1]:5054/")]
+    public void Production_allows_explicitly_approved_loopback_upstream(string upstream)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ApiProxy:UpstreamBaseUrl"] = "http://127.0.0.1:5054/",
+            ["ApiProxy:UpstreamBaseUrl"] = upstream,
             ["ApiProxy:AllowLoopbackUpstream"] = "true"
         }).Build();
 
         var result = WebProxySettings.Validate(configuration, new TestHostEnvironment("Production"));
 
-        Assert.Equal("http://127.0.0.1:5054/", result.UpstreamBaseUrl.AbsoluteUri);
+        Assert.Equal(upstream, result.UpstreamBaseUrl.AbsoluteUri, ignoreCase: true);
+    }
+
+    [Fact]
+    public async Task Web_health_is_served_without_an_api_upstream()
+    {
+        await using var factory = new ProxyWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/web/live");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/not-found")]
+    [InlineData("/health/api/live")]
+    public async Task Unavailable_api_proxy_routes_return_problem_502_without_spa_fallback(string path)
+    {
+        await using var factory = new ProxyWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("<!doctype html", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Non_proxy_paths_remain_handled_by_web_static_files_and_spa_fallback()
+    {
+        await using var factory = new ProxyWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var staticResponse = await client.GetAsync("/index.html");
+        var spaResponse = await client.GetAsync("/workbench/inbound");
+
+        Assert.Equal(HttpStatusCode.OK, staticResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, spaResponse.StatusCode);
+        Assert.Contains("立库工作台", await spaResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Production_invalid_configuration_prevents_web_host_startup()
+    {
+        using var factory = new ProxyWebApplicationFactory(environmentName: "Production", upstream: "ftp://api.example.test/");
+
+        Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
     }
 
     private static string FindRepositoryRoot()
@@ -104,5 +162,18 @@ public sealed class FrontendProxyRoutingTests
         public string ApplicationName { get; set; } = "Warehouse.Wms.Web.Tests";
         public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+
+    private sealed class ProxyWebApplicationFactory(string environmentName = "Development", string? upstream = null)
+        : WebApplicationFactory<warehouseWeb::Warehouse.Wms.Web.ApiProxyConfiguration>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment(environmentName);
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ApiProxy:UpstreamBaseUrl"] = upstream ?? "http://127.0.0.1:1/"
+            }));
+        }
     }
 }
