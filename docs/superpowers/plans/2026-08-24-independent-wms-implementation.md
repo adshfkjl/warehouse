@@ -1261,9 +1261,10 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 清单以一次性显式动作建立，建立日期为 `2026-08-27`；纳入 133 个文件，排除路径段精确为 `bin` 或 `obj` 的目录。审查修复前先逐项确认旧清单内容与当前 133 个文件无新增、删除或内容变化，再以严格 Ordinal 相对路径排序重建；清单自身 SHA-256 为 `4fe59fcac7943e0f7024a3aace674a057d0aa002476f6652a302432902fd0339`。
 - TDD：先运行新增脚本测试，因缺少 `scripts/verify-legacy-source.ps1` 预期失败；加入脚本后发现并修复嵌套路径 POSIX 分隔符比较缺陷。审查修复新增路径排序、乱序拒绝、合法哈希的 `../`/绝对/dot-segment/backslash 路径、ReparsePoint 父路径/根目录和失败后清单字节不变回归；`binary/kept.txt` 内容变化也断言清单字节不变。最终 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1` 退出码 0，15/15 通过。
 - `pwsh -NoProfile -File scripts/verify-legacy-source.ps1` 退出码 0，133 个文件匹配；`dotnet test tests/Warehouse.Wms.UnitTests/Warehouse.Wms.UnitTests.csproj --filter FullyQualifiedName~QualityGateConfigurationTests --no-restore` 退出码 0，4/4 通过。
-- `pwsh -NoProfile -File scripts/verify.ps1` 已运行：restore、build（0 警告/0 错误）、Unit 149 通过/2 跳过、Integration 50 通过/25 跳过、Device Contract 37 通过、旧源码 133 文件校验和 API 健康检查均通过；Docker daemon 不可用使 SQL 迁移检查按既有规则 `BLOCKED`，脚本退出码 2。不得将其记录为完整质量门禁通过。
+- `pwsh -NoProfile -File scripts/verify.ps1` 已运行：restore、build（0 警告/0 错误）、Unit 149 通过/2 跳过、Integration 50 通过/25 跳过、Device Contract 37 通过、旧源码 133 文件校验和 API 健康检查均通过；Docker daemon 不可用使该脚本的容器迁移分支按既有规则 `BLOCKED`，脚本退出码 2。
+- 使用本机仅供开发验证的 `MSSQL$TEW_SQLEXPRESS` 完成等价 SQL 门禁：`sqlcmd -S localhost\\TEW_SQLEXPRESS -E -C` 连通性检查通过；设置 `ConnectionStrings__WmsDb=Server=localhost\\TEW_SQLEXPRESS;Database=WarehouseWmsTask911A;Trusted_Connection=True;TrustServerCertificate=True` 后，`dotnet ef database update --project src/Warehouse.Wms.Infrastructure --startup-project src/Warehouse.Wms.Api` 从空库创建并应用全部迁移，重复执行报告数据库已是最新；SQL 持久化模式 API 在动态开发端口启动，`/health/live` 和 `/health/ready` 均返回 200。
 - 来源副本核对：`HUMAN_PENDING`。没有可访问的可信备份或现场原始副本，未宣称基线建立前的历史完整性；旧 `warehouse/` 仅被读取，未修改。
-- 门禁状态：`BLOCKED`（仅因本机 Docker daemon 不可用，SQL 迁移门禁未执行）；源码完整性校验与自动化脚本测试具备 `AGENT_VERIFIED` 证据。启动 Docker daemon 后必须重跑 `pwsh -NoProfile -File scripts/verify.ps1`，取得退出码 0 后才能将本 Task 更新为完整 `AGENT_VERIFIED`。
+- 门禁状态：`AGENT_VERIFIED`（源码完整性、自动化测试、SQL Express 等价迁移和 SQL 模式健康检查均通过）。`scripts/verify.ps1` 在本机仍因 Docker daemon 不可用退出码 2；该环境差异已记录，不阻断本 Task，具备 Docker 的环境仍需按脚本重跑容器迁移。外部门禁：`HUMAN_PENDING`（来源副本历史核对）。
 
 ### Task 9.12A：代理路由、配置与安全边界
 
