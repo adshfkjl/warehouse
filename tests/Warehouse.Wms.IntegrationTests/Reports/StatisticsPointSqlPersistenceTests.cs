@@ -59,13 +59,16 @@ public sealed class StatisticsPointSqlPersistenceTests
             db.Tasks.Add(CreateTask("STAT-FAILED", TaskState.Failed, "{\"SourceLocation\":\"DEV-A01-R01-001\"}", now));
             db.Tasks.Add(CreateTask("STAT-EXECUTING", TaskState.Executing, "{\"DestinationLocation\":\"DEV-A01-R01-001\"}", now));
             db.Tasks.Add(CreateTask("STAT-UNKNOWN", TaskState.Failed, "[]", now));
+            db.Tasks.Add(CreateTask("STAT-BAD-LOCATION", TaskState.Failed, "{\"SourceLocation\":\"NO-SUCH-LOCATION\"}", now));
             await db.SaveChangesAsync();
         }
         var request = await new SqlServerStatisticsSource(factory, "DEV").BuildAsync(StatisticsPeriod.Day, now.AddMinutes(-1), now.AddMinutes(1), "v1");
         Assert.NotNull(request);
         Assert.Equal(50, request!.Kpi!.TaskSuccessRatePercent);
         Assert.Equal(1, request.Kpi.ExceptionCount);
-        Assert.DoesNotContain(request.TaskStates!, x => x.State == nameof(TaskState.Executing));
+        Assert.Collection(request.TaskStates!.OrderBy(x => x.State),
+            state => { Assert.Equal(nameof(TaskState.Failed), state.State); Assert.Equal(1, state.Count); },
+            state => { Assert.Equal(nameof(TaskState.Succeeded), state.State); Assert.Equal(1, state.Count); });
     }
 
     private static WarehouseTask CreateTask(string number, TaskState target, string context, DateTimeOffset at)
@@ -77,8 +80,18 @@ public sealed class StatisticsPointSqlPersistenceTests
         if (target == TaskState.Failed) { task.TransitionTo(TaskState.Failed, "test", "failed", occurredAt: at); return task; }
         task.TransitionTo(TaskState.Dispatching, "test", "dispatching", occurredAt: at);
         task.TransitionTo(TaskState.SentToPlc, "test", "sent", occurredAt: at);
-        task.TransitionTo(target, "test", target.ToString(), occurredAt: at);
-        return task;
+        if (target == TaskState.Succeeded)
+        {
+            task.TransitionTo(TaskState.Executing, "test", "executing", occurredAt: at);
+            task.TransitionTo(TaskState.Succeeded, "test", "succeeded", occurredAt: at);
+            return task;
+        }
+        if (target == TaskState.Executing)
+        {
+            task.TransitionTo(TaskState.Executing, "test", "executing", occurredAt: at);
+            return task;
+        }
+        throw new ArgumentOutOfRangeException(nameof(target));
     }
     private sealed class PooledFactory(DbContextOptions<WarehouseDbContext> options) : IDbContextFactory<WarehouseDbContext>, IDisposable
     { public WarehouseDbContext CreateDbContext()=>new(options); public ValueTask<WarehouseDbContext> CreateDbContextAsync(CancellationToken cancellationToken=default)=>new(new WarehouseDbContext(options)); public void Dispose() { } }
