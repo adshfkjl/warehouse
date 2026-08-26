@@ -4,6 +4,8 @@ using Warehouse.Wms.Infrastructure.Reports;
 using Warehouse.Wms.Infrastructure.Warehouse;
 using Warehouse.Wms.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Warehouse.Wms.Domain.Inventory;
+using Warehouse.Wms.Domain.Tasks;
 
 namespace Warehouse.Wms.UnitTests.Reports;
 
@@ -74,6 +76,25 @@ public sealed class StatisticsPointPersistenceTests
         var model = new SqlServerPointReadModel(new CanceledFactory());
         using var cts = new CancellationTokenSource(); cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => model.QueryAsync(cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public void Sql_statistics_aggregation_uses_fact_tables_and_does_not_claim_success_when_empty()
+    {
+        var start = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var request = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1",
+            [new InventoryStatisticsFact(12, 24, InventoryStatus.Available, Guid.NewGuid())],
+            [new TransactionStatisticsFact(InventoryTransactionType.Increase, 5, start.AddHours(1)), new TransactionStatisticsFact(InventoryTransactionType.Decrease, 2, start.AddHours(2))],
+            [new TaskStatisticsFact(TaskState.Succeeded, start.AddHours(1)), new TaskStatisticsFact(TaskState.Failed, start.AddHours(2))],
+            [new LocationStatisticsFact(10, true), new LocationStatisticsFact(10, false)]);
+        Assert.NotNull(request);
+        Assert.Equal(12, request!.Kpi!.InventoryQuantity);
+        Assert.Equal(5, request.Kpi.InboundQuantity);
+        Assert.Equal(50, request.Kpi.TaskSuccessRatePercent);
+        Assert.Equal(5, request.Kpi.LocationUtilizationPercent);
+        Assert.Single(request.Trends!);
+        Assert.Contains(request.TaskStates!, x => x.State == nameof(TaskState.Failed) && x.Count == 1);
+        Assert.Null(StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [], [], []));
     }
 
     private sealed class TestStatisticsSource(StatisticsKpi? kpi) : IStatisticsSource

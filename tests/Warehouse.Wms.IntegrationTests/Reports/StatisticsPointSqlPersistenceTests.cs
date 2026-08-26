@@ -4,6 +4,8 @@ using Warehouse.Wms.Application.Reports;
 using Warehouse.Wms.Infrastructure.Persistence;
 using Warehouse.Wms.Infrastructure.Reports;
 using Warehouse.Wms.Infrastructure.Warehouse;
+using Warehouse.Wms.Domain.Inventory;
+using Warehouse.Wms.Domain.Tasks;
 
 namespace Warehouse.Wms.IntegrationTests.Reports;
 
@@ -22,6 +24,24 @@ public sealed class StatisticsPointSqlPersistenceTests
         var points = new SqlServerPointReadModel(factory); var now=DateTimeOffset.UtcNow;
         await points.UpsertAsync(new WarehousePointSnapshot("WH","Z","A","R",1,"L","PhysicalUnknown","P",null,null,null,0,0,now,2,true,"unknown",null,null));
         Assert.Equal("PhysicalUnknown", Assert.Single(points.Query()).Status);
+    }
+
+    [SqlServerFact]
+    public async Task Sql_statistics_source_generates_nonzero_kpi_from_wms_facts()
+    {
+        var configured = Environment.GetEnvironmentVariable("WMS_SQLSERVER_TEST_CONNECTION")!;
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configured) { InitialCatalog = $"WmsStatsFacts_{Guid.NewGuid():N}" };
+        using var factory = new PooledFactory(new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options);
+        await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.InventoryBalances.Add(new InventoryBalanceEntity { Id = Guid.NewGuid(), BalanceKey = "fact-1", MaterialId = Guid.NewGuid(), Quantity = 12, WeightKg = 24, Status = InventoryStatus.Available, Version = 1 });
+            await db.SaveChangesAsync();
+        }
+        var start = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var request = await new SqlServerStatisticsSource(factory).BuildAsync(StatisticsPeriod.Day, start, start.AddDays(1), "v1");
+        Assert.NotNull(request);
+        Assert.Equal(12, request!.Kpi!.InventoryQuantity);
     }
     private sealed class PooledFactory(DbContextOptions<WarehouseDbContext> options) : IDbContextFactory<WarehouseDbContext>, IDisposable
     { public WarehouseDbContext CreateDbContext()=>new(options); public ValueTask<WarehouseDbContext> CreateDbContextAsync(CancellationToken cancellationToken=default)=>new(new WarehouseDbContext(options)); public void Dispose() { } }
