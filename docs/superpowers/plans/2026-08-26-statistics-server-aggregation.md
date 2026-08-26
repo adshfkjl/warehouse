@@ -19,11 +19,11 @@
 - Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
 - Modify: `PROJECT_DESIGN.md`
 
-- [ ] **Step 1: Write failing tests for SQL aggregate semantics**
+- [x] **Step 1: Write failing tests for SQL aggregate semantics**
 
   增加测试数据和断言，覆盖：空事实返回 `null`；零容量利用率为 `0`；入库/出库/移库数量与现有契约一致；仓库范围的 Move 同时按源库位和目标库位纳入；任务成功率仍只使用终态任务。
 
-- [ ] **Step 2: Run focused SQL tests and record the baseline**
+- [x] **Step 2: Run focused SQL tests and record the baseline**
 
   Run:
 
@@ -34,15 +34,15 @@
 
   Expected: new aggregate assertions fail before the implementation changes.
 
-- [ ] **Step 3: Implement bounded SQL aggregation**
+- [x] **Step 3: Implement bounded SQL aggregation**
 
   Replace full fact collection in `SqlServerStatisticsSource.BuildAsync` with SQL projections for balance totals, transaction totals and location capacity/occupancy. Keep task context selection bounded by period and candidate warehouse locations, and pass all sums into the existing `StatisticsAggregation.Build` without changing its terminal-task logic.
 
-- [ ] **Step 4: Add a bounded-load integration assertion**
+- [x] **Step 4: Add a bounded-load integration assertion**
 
   Seed a large number of balances and transactions in a disposable Docker database, run `BuildAsync`, and assert the returned KPI totals. Instrument the query or use an EF command interceptor to assert that balance and transaction entity rows are not materialized as full fact collections.
 
-- [ ] **Step 5: Run focused and full verification**
+- [x] **Step 5: Run focused and full verification**
 
   Run the focused SQL test, then:
 
@@ -56,6 +56,6 @@
 
   Expected: 0 build errors, 0 test failures, migration current, both health checks 200, quality gate exit code 0, and no `warehouse/` diff.
 
-- [ ] **Step 6: Update execution evidence and commit**
+- [x] **Step 6: Update execution evidence and commit**
 
   Record the exact test counts, SQL migration result, quality gate result, known `HUMAN_PENDING`/`FIELD_PENDING` items and any push failure in the main implementation plan. Commit only the Task 9.11 files with message `feat(wms): push statistics aggregation to sql`.
