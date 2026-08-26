@@ -1228,6 +1228,16 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** terra 提交 `f2aa318`，将库存余额数量/重量、库位容量/占用和周期流水按 SQL 投影聚合；任务上下文只读取周期内必要 JSON，库位归属同时支持库位编码和 `LocationId.ToString("D")` GUID，指定仓库的出库按库位、移库按源/目标库位纳入。新增 SQL 命令拦截器断言余额/流水查询含 `SUM`，以及大数据量、Move 源/目标范围、GUID 任务归属回归测试。主代理独立验证：Task 9.11 定向 SQL 测试 5/5 通过；`dotnet restore`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false` 构建 0 警告/0 错误；全量 Unit 148 通过/2 跳过、Integration 75 通过、Device Contract 37 通过；Docker SQL 迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；`scripts/verify.ps1` 通过。旧 `warehouse/` 目录未出现在 tracked diff；该目录当前为未跟踪参考源码，内容变更无法由 Git 历史直接证明，继续保持只读人工审计项。自动化状态：`AGENT_VERIFIED`。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
+### Task 9.12：补齐 API 与 Web 的同源代理配置
+
+**前置条件：** Task 8.2 和 Task 9.11 已达到 `AGENT_VERIFIED`；不得连接生产 API、ERP、数据库或 PLC，不得修改旧 `warehouse/`。专项施工计划见 [`docs/superpowers/plans/2026-08-26-api-web-proxy.md`](2026-08-26-api-web-proxy.md)。
+
+**目标：** 为 `Warehouse.Wms.Web` 增加可配置的同源反向代理，将 `/api/` 和 `/health/` 转发到 API 上游；浏览器继续使用相对路径，开发环境默认指向本机 API，生产环境必须显式配置上游地址。代理只允许白名单路径，不代理静态文件，不改变 API 认证和业务授权。
+
+**计划范围：** Web 项目代理依赖和启动配置、API 上游配置样例、Web/API 集成测试、前端固定端口检查、开发文档和 README；不修改 API 控制器、业务服务、PLC 协议或数据库模型。
+
+**验收：** `AGENT_VERIFIED`；代理 GET/POST 保留路径、查询串、请求体、状态码和内容类型；Web 静态文件仍由 Web 提供；缺失/非法上游配置启动失败；相对 `/api` 前端请求在 Web `5055` 通过 API `5054` 成功；完整 build/test、健康检查和质量门禁通过。真实部署域名、TLS、认证网关和现场网络策略继续由 `HUMAN_PENDING`/`FIELD_PENDING` 确认。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
