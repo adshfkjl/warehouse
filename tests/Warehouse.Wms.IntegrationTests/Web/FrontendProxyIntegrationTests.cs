@@ -35,6 +35,7 @@ public sealed class FrontendProxyIntegrationTests
         Assert.Equal("application/json", capture.Headers["Accept"]);
         Assert.Equal("corr-123", capture.Headers["X-Correlation-ID"]);
         Assert.Matches("^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$", capture.Headers["traceparent"]);
+        Assert.Equal(1, fixture.Upstream.Count("/api/echo"));
     }
 
     [Fact]
@@ -67,6 +68,25 @@ public sealed class FrontendProxyIntegrationTests
         Assert.Equal(1, fixture.Upstream.Count("/api/commands"));
     }
 
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("POST")]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    [InlineData("DELETE")]
+    public async Task Proxy_does_not_retry_any_method_after_an_upstream_503(string method)
+    {
+        await using var fixture = await ProxyFixture.StartAsync();
+        fixture.Upstream.ReturnStatusOnce("/api/transient", HttpStatusCode.ServiceUnavailable);
+        using var request = new HttpRequestMessage(new HttpMethod(method), "/api/transient");
+        if (!string.Equals(method, "GET", StringComparison.Ordinal)) request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+        using var response = await fixture.Web.SendAsync(request);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await Task.Delay(300);
+        Assert.Equal(1, fixture.Upstream.Count("/api/transient"));
+    }
+
     [Fact]
     public async Task Proxy_forwards_multipart_file_name_and_bytes()
     {
@@ -77,9 +97,9 @@ public sealed class FrontendProxyIntegrationTests
         using var response = await fixture.Web.PostAsync("/api/imports", content);
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var capture = await fixture.Upstream.WaitForRequestAsync("/api/imports");
-        Assert.Contains("multipart/form-data", capture.Headers["Content-Type"], StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("inbound.xlsx", capture.Body, StringComparison.Ordinal);
-        Assert.Contains("PK", capture.Body, StringComparison.Ordinal);
+        Assert.Equal("file", capture.Upload!.FieldName);
+        Assert.Equal("inbound.xlsx", capture.Upload.FileName);
+        Assert.Equal(new byte[] { 0x50, 0x4B, 0x03, 0x04 }, capture.Upload.Bytes);
     }
 
     [Fact]
@@ -92,6 +112,18 @@ public sealed class FrontendProxyIntegrationTests
         Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("attachment; filename=errors.xlsx", response.Content.Headers.ContentDisposition?.ToString());
         Assert.Equal(new byte[] { 0x58, 0x4C, 0x53, 0x58 }, await response.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Proxy_preserves_api_problem_status_and_json_body()
+    {
+        await using var fixture = await ProxyFixture.StartAsync();
+        using var response = await fixture.Web.GetAsync("/api/error");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("validation_failed", document.RootElement.GetProperty("code").GetString());
     }
 
     [Fact]
@@ -174,9 +206,28 @@ public sealed class FrontendProxyIntegrationTests
         public static async Task<WebProcess> StartAsync(Uri upstream)
         {
             var root = FindRepositoryRoot();
-            var dll = Path.Combine(root, "src", "Warehouse.Wms.Web", "bin", "Debug", "net8.0", "Warehouse.Wms.Web.dll");
             var contentRoot = Path.Combine(root, "src", "Warehouse.Wms.Web");
-            var process = new Process { StartInfo = new ProcessStartInfo("dotnet", $"\"{dll}\" --urls http://127.0.0.1:0 --contentRoot \"{contentRoot}\"") { WorkingDirectory = contentRoot, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true } };
+            var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+                ?? throw new DirectoryNotFoundException("The test build configuration could not be determined.");
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo("dotnet")
+                {
+                    WorkingDirectory = root,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.StartInfo.ArgumentList.Add("run");
+            process.StartInfo.ArgumentList.Add("--project");
+            process.StartInfo.ArgumentList.Add(Path.Combine("src", "Warehouse.Wms.Web"));
+            process.StartInfo.ArgumentList.Add("--no-build");
+            process.StartInfo.ArgumentList.Add("--configuration");
+            process.StartInfo.ArgumentList.Add(configuration);
+            process.StartInfo.ArgumentList.Add("--urls");
+            process.StartInfo.ArgumentList.Add("http://127.0.0.1:0");
             process.StartInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
             process.StartInfo.Environment["ASPNETCORE_CONTENTROOT"] = contentRoot;
             process.StartInfo.Environment["ApiProxy__UpstreamBaseUrl"] = upstream.AbsoluteUri;
@@ -196,19 +247,40 @@ public sealed class FrontendProxyIntegrationTests
                 }
             };
             process.ErrorDataReceived += (_, args) => { if (args.Data is not null) logs.Enqueue(args.Data); };
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            var completed = await Task.WhenAny(listening.Task, Task.Delay(TimeSpan.FromSeconds(20)));
-            if (completed == listening.Task) return new WebProcess(process, await listening.Task, logs);
-            process.Kill(true);
-            throw new TimeoutException($"Web Kestrel did not report a dynamic listening address: {string.Join(Environment.NewLine, logs)}");
+            try
+            {
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                var exited = process.WaitForExitAsync();
+                var completed = await Task.WhenAny(listening.Task, exited, Task.Delay(TimeSpan.FromSeconds(20)));
+                if (completed == listening.Task) return new WebProcess(process, await listening.Task, logs);
+                if (completed == exited) throw new InvalidOperationException($"Web exited with {process.ExitCode}: {string.Join(Environment.NewLine, logs)}");
+                throw new TimeoutException($"Web Kestrel did not report a dynamic listening address: {string.Join(Environment.NewLine, logs)}");
+            }
+            catch
+            {
+                await StopAndDisposeAsync(process);
+                throw;
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (!_process.HasExited) { _process.Kill(true); await _process.WaitForExitAsync(); }
-            _process.Dispose();
+            await StopAndDisposeAsync(_process);
+        }
+
+        private static async Task StopAndDisposeAsync(Process process)
+        {
+            try
+            {
+                if (!process.HasExited) process.Kill(true);
+                await process.WaitForExitAsync();
+            }
+            finally
+            {
+                process.Dispose();
+            }
         }
     }
 
@@ -216,6 +288,7 @@ public sealed class FrontendProxyIntegrationTests
     {
         private readonly WebApplication _app;
         private readonly ConcurrentQueue<Capture> _requests = new();
+        private readonly ConcurrentDictionary<string, HttpStatusCode> _oneTimeStatuses = new(StringComparer.Ordinal);
         private readonly TaskCompletionSource<bool> _cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private StubApiServer(WebApplication app) { _app = app; }
         public Uri BaseAddress { get; private set; } = null!;
@@ -236,15 +309,34 @@ public sealed class FrontendProxyIntegrationTests
 
         private async Task HandleAsync(HttpContext context)
         {
-            var body = await new StreamReader(context.Request.Body).ReadToEndAsync(context.RequestAborted);
-            var capture = new Capture(context.Request.Path, context.Request.Query.ToDictionary(item => item.Key, item => item.Value.ToString()), context.Request.Headers.ToDictionary(item => item.Key, item => item.Value.ToString()), body);
+            Upload? upload = null;
+            var body = string.Empty;
+            if (context.Request.Path == "/api/imports")
+            {
+                var form = await context.Request.ReadFormAsync(context.RequestAborted);
+                var file = Assert.Single(form.Files);
+                await using var bytes = new MemoryStream();
+                await file.CopyToAsync(bytes, context.RequestAborted);
+                upload = new Upload(file.Name, file.FileName, bytes.ToArray());
+            }
+            else
+            {
+                body = await new StreamReader(context.Request.Body).ReadToEndAsync(context.RequestAborted);
+            }
+            var capture = new Capture(context.Request.Path, context.Request.Query.ToDictionary(item => item.Key, item => item.Value.ToString()), context.Request.Headers.ToDictionary(item => item.Key, item => item.Value.ToString()), body, upload);
             _requests.Enqueue(capture);
+            if (_oneTimeStatuses.TryRemove(context.Request.Path, out var status))
+            {
+                context.Response.StatusCode = (int)status;
+                return;
+            }
             switch (context.Request.Path)
             {
                 case "/api/echo": await Results.Ok(new { ok = true }).ExecuteAsync(context); break;
                 case "/api/commands": context.Response.StatusCode = 201; break;
                 case "/api/imports": context.Response.StatusCode = 202; break;
                 case "/api/reports/errors": context.Response.ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"; context.Response.Headers.ContentDisposition = "attachment; filename=errors.xlsx"; await context.Response.Body.WriteAsync(new byte[] { 0x58, 0x4C, 0x53, 0x58 }); break;
+                case "/api/error": context.Response.StatusCode = 422; context.Response.ContentType = "application/problem+json"; await context.Response.WriteAsync("{\"code\":\"validation_failed\"}"); break;
                 case "/api/cancel": try { await Task.Delay(TimeSpan.FromSeconds(10), context.RequestAborted); } catch (OperationCanceledException) { _cancelled.TrySetResult(true); } break;
                 case "/api/slow": await Task.Delay(TimeSpan.FromSeconds(7)); await Results.Ok().ExecuteAsync(context); break;
                 default: context.Response.StatusCode = 404; break;
@@ -252,13 +344,15 @@ public sealed class FrontendProxyIntegrationTests
         }
 
         public int Count(string path) => _requests.Count(item => item.Path == path);
+        public void ReturnStatusOnce(string path, HttpStatusCode status) => _oneTimeStatuses[path] = status;
         public async Task<Capture> WaitForRequestAsync(string path) { for (var i = 0; i < 50; i++) { var item = _requests.FirstOrDefault(request => request.Path == path); if (item is not null) return item; await Task.Delay(20); } throw new TimeoutException($"No request for {path}."); }
         public async Task<bool> WaitForCancellationAsync() { await Task.WhenAny(_cancelled.Task, Task.Delay(3000)); return _cancelled.Task.IsCompletedSuccessfully; }
         public async Task StopAsync() { await _app.StopAsync(); await _app.DisposeAsync(); }
         public async ValueTask DisposeAsync() { await _app.StopAsync(); await _app.DisposeAsync(); }
     }
 
-    private sealed record Capture(string Path, IReadOnlyDictionary<string, string> Query, IReadOnlyDictionary<string, string> Headers, string Body);
+    private sealed record Capture(string Path, IReadOnlyDictionary<string, string> Query, IReadOnlyDictionary<string, string> Headers, string Body, Upload? Upload);
+    private sealed record Upload(string FieldName, string FileName, byte[] Bytes);
 
     private sealed record TcpProbe(bool Connected, SocketError? Error, TimeSpan Elapsed)
     {
