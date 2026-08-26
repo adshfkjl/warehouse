@@ -45,6 +45,49 @@ public sealed class StatisticsPointPersistenceTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker.RunOnceAsync(DateTimeOffset.UtcNow, cts.Token));
     }
 
+    [Fact]
+    public async Task Statistics_worker_does_not_generate_an_incomplete_period_or_before_run_at()
+    {
+        var service = new InMemoryStatisticsService();
+        var source = new TestStatisticsSource(new StatisticsKpi(1, 2, 3, 4, 5, 6, 7, 8, 9));
+        var worker = new StatisticsWorker(service, new StatisticsScheduleOptions(StatisticsPeriod.Hour, TimeSpan.FromHours(1)), "v1", source);
+
+        Assert.Null(await worker.RunOnceAsync(new DateTimeOffset(2026, 8, 26, 0, 30, 0, TimeSpan.Zero)));
+        var snapshot = await worker.RunOnceAsync(new DateTimeOffset(2026, 8, 26, 1, 30, 0, TimeSpan.Zero));
+        Assert.NotNull(snapshot);
+        Assert.Equal(new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero), snapshot!.PeriodStart);
+        Assert.Equal(1, snapshot.Kpi.InventoryQuantity);
+    }
+
+    [Fact]
+    public async Task Statistics_worker_does_not_write_when_source_unavailable()
+    {
+        var service = new InMemoryStatisticsService();
+        var worker = new StatisticsWorker(service, new StatisticsScheduleOptions(StatisticsPeriod.Hour, TimeSpan.Zero), "v1", new TestStatisticsSource(null));
+        Assert.Null(await worker.RunOnceAsync(new DateTimeOffset(2026, 8, 26, 2, 0, 0, TimeSpan.Zero)));
+        Assert.Null(service.LatestSuccessful);
+    }
+
+    [Fact]
+    public async Task Sql_point_query_honors_cancellation_before_opening_context()
+    {
+        var model = new SqlServerPointReadModel(new CanceledFactory());
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => model.QueryAsync(cancellationToken: cts.Token));
+    }
+
+    private sealed class TestStatisticsSource(StatisticsKpi? kpi) : IStatisticsSource
+    {
+        public Task<StatisticsBatchRequest?> BuildAsync(StatisticsPeriod period, DateTimeOffset start, DateTimeOffset end, string sourceVersion, CancellationToken cancellationToken = default)
+            => Task.FromResult<StatisticsBatchRequest?>(kpi is null ? null : new StatisticsBatchRequest(period, start, end, sourceVersion, Kpi: kpi));
+    }
+
+    private sealed class CanceledFactory : IDbContextFactory<WarehouseDbContext>
+    {
+        public WarehouseDbContext CreateDbContext() => throw new InvalidOperationException();
+        public ValueTask<WarehouseDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) { _ = this; cancellationToken.ThrowIfCancellationRequested(); throw new InvalidOperationException(); }
+    }
+
     private sealed class TestDbContextFactory : IDbContextFactory<WarehouseDbContext>
     {
         private readonly bool _unused = true;

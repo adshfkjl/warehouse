@@ -48,6 +48,8 @@ public sealed record PalletPosition(
 public interface IPointReadModel
 {
     IReadOnlyCollection<WarehousePointSnapshot> Query(PointQuery? query = null, DateTimeOffset? now = null);
+    Task<IReadOnlyCollection<WarehousePointSnapshot>> QueryAsync(PointQuery? query = null, DateTimeOffset? now = null, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); return Task.FromResult(Query(query, now)); }
     WarehousePointSnapshot? GetByLocation(string locationCode, DateTimeOffset? now = null);
     PalletPosition? FindPallet(string palletCode, DateTimeOffset? now = null);
 }

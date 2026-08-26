@@ -11,8 +11,8 @@ public sealed class WarehousePointsController : ControllerBase
     public WarehousePointsController(IPointReadModel points) => _points = points;
 
     [HttpGet("points")]
-    public ActionResult<IReadOnlyCollection<WarehousePointSnapshot>> Points([FromQuery] PointQuery query)
-        => Ok(_points.Query(query));
+    public async Task<ActionResult<IReadOnlyCollection<WarehousePointSnapshot>>> Points([FromQuery] PointQuery query, CancellationToken cancellationToken)
+        => Ok(await _points.QueryAsync(query, cancellationToken: cancellationToken));
 
     [HttpGet("points/{locationCode}")]
     public ActionResult<WarehousePointSnapshot> Point(string locationCode)

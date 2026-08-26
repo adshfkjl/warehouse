@@ -155,7 +155,8 @@ builder.Services.AddSingleton<IPointReadModel>(_ => new InMemoryPointReadModel([
     new WarehousePointSnapshot("WH-01", "Z1", "A1", "R01", 2, "A1-01-02", "Free", null, null, null, null, 0, 0, DateTimeOffset.UtcNow.AddSeconds(-20), 1, false, null, "Idle", null),
     new WarehousePointSnapshot("WH-01", "Z1", "A2", "R02", 2, "A2-02-02", "PhysicalUnknown", "PLT-00117", "MAT-002", "待核对物料", "LOT-02", 1, 10, DateTimeOffset.UtcNow.AddMinutes(-8), 2, true, "设备结果未知", "Unknown", "LP-02")
 ]));
-builder.Services.AddSingleton<StatisticsWorker>(sp => new StatisticsWorker(sp.GetRequiredService<IStatisticsService>(), sp.GetRequiredService<StatisticsScheduleOptions>(), builder.Configuration["Wms:Statistics:SourceVersion"] ?? "wms-v1"));
+builder.Services.AddSingleton<IStatisticsSource, UnavailableStatisticsSource>();
+builder.Services.AddSingleton<StatisticsWorker>(sp => new StatisticsWorker(sp.GetRequiredService<IStatisticsService>(), sp.GetRequiredService<StatisticsScheduleOptions>(), builder.Configuration["Wms:Statistics:SourceVersion"] ?? "wms-v1", sp.GetRequiredService<IStatisticsSource>()));
 builder.Services.AddHostedService<StatisticsWorkerHostedService>();
 builder.Services.AddSingleton<MessagingHealthState>();
 builder.Services.AddSingleton<WarehouseHealthCheckService>();

@@ -63,3 +63,8 @@ public interface IStatisticsService
     Task<StatisticsSnapshot> GenerateAsync(StatisticsBatchRequest request, bool fail = false, CancellationToken cancellationToken = default);
     StatisticsSnapshot GetSummary(StatisticsPeriod? period = null, string? warehouseCode = null);
 }
+
+public interface IStatisticsSource
+{
+    Task<StatisticsBatchRequest?> BuildAsync(StatisticsPeriod period, DateTimeOffset periodStart, DateTimeOffset periodEnd, string sourceVersion, CancellationToken cancellationToken = default);
+}
