@@ -1196,6 +1196,24 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **仓库范围补全（2026-08-26）：** `StatisticsScheduleOptions.WarehouseCode` 支持可配置范围，Worker 写入带范围的批次；`SqlServerStatisticsSource` 按 Location→Rack→Aisle→Zone→Warehouse 关系过滤库存、流水和容量并返回范围，Program 仅 SQL 模式注入真实源；新增 Worker 范围单测。
 **移库范围修复与最终验收（2026-08-26）：** 仓库范围下的 `Move` 流水同时按 `SourceLocationId`/`DestinationLocationId` 过滤，避免 `LocationId` 为空导致移库趋势丢失；Worker 在统计源已带范围时不再无条件覆盖为空。主代理独立验证：`dotnet restore`、`dotnet build` 0 警告/错误；全量测试 Unit 148 通过/2 跳过、Integration 50 通过/22 跳过、Device Contract 37 通过；显式 SQL 连接下报表集成测试 6/6 通过；Docker SQL 迁移已是最新，健康端点均返回 200，`scripts/verify.ps1` 质量门禁通过，`warehouse/` 无 tracked diff。统计终态口径、任务仓库归属和大数据量 SQL 下推聚合保留 `HUMAN_PENDING`/后续 Task。
 
+### Task 9.10：统计任务仓库归属与终态 KPI 口径硬化
+
+**前置条件：** Task 9.9 达到 `AGENT_VERIFIED`；不得连接生产 PLC、生产数据库或 ERP；不得修改旧 `warehouse/`、PLC 协议或设备时序。
+
+**目标：** 修复统计源中任务范围和成功率口径：从任务持久化的设备调度上下文解析源/目标库位，沿 Location→Rack→Aisle→Zone→Warehouse 关系确定任务仓库归属；统计成功率、任务状态分布和异常数只使用周期内已确定的终态任务，未完成任务不进入成功率分母；指定仓库范围时无法解析归属的任务不得混入该仓库批次。
+
+**允许修改范围：** `src/Warehouse.Wms.Application/Reports/`、`src/Warehouse.Wms.Infrastructure/Reports/`、必要的统计契约/测试、`PROJECT_DESIGN.md`、本计划和 `docs/user-guide.md`；如确需调整任务调度上下文，只能修改新 WMS 代码及对应迁移/测试，不得修改 PLC 或旧 `warehouse/`。
+
+**必须完成：**
+
+- [ ] 扩展任务统计事实，保留任务 ID、当前状态、更新时间和可解析的源/目标库位标识；非法或缺失调度上下文不得猜测仓库。
+- [ ] SQL 模式按库位层级解析任务仓库归属；无仓库范围时保留所有可读任务，有仓库范围时只保留至少一个关联位置属于该仓库且归属可确定的任务。
+- [ ] 成功率分母只包含 `Succeeded`、`Failed`、`TimedOut`、`Canceled`、`ManualIntervention` 等终态；未完成任务不降低成功率；异常数只按每个任务当前终态计数一次。
+- [ ] 增加内存聚合和 SQL 集成测试：重复状态历史/任务去重、未完成任务不进分母、跨仓库任务不混入范围批次、缺失上下文不猜测、终态异常只计数一次。
+- [ ] 保持统计批次幂等、失败保留、Worker 取消传播和 SQL/InMemory 显式模式；不得把测试空数据改成伪造成功率。
+
+**验收：** `AGENT_VERIFIED`；统计定向测试、SQL 报表集成测试、完整 build/test、Docker 迁移、健康检查和 `warehouse/` 保护通过。大数据量服务端聚合优化另列后续 Task；真实统计阈值和现场设备状态继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
