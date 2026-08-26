@@ -98,6 +98,13 @@ public sealed class StatisticsPointPersistenceTests
         var deduped = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [new InventoryStatisticsFact(1, 1, InventoryStatus.Available, null)], [], [new TaskStatisticsFact(taskId, TaskState.Executing, start.AddHours(1)), new TaskStatisticsFact(taskId, TaskState.Succeeded, start.AddHours(2))], [new LocationStatisticsFact(10, 1), new LocationStatisticsFact(10, 0)]);
         Assert.Equal(100, deduped!.Kpi!.TaskSuccessRatePercent);
         Assert.Null(StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [], [], []));
+
+        var scoped = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [new InventoryStatisticsFact(1, 1, InventoryStatus.Available, null)], [], [
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start.AddHours(1), "WH-01", true),
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start.AddHours(1), "WH-02", true),
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start.AddHours(1))], [new LocationStatisticsFact(10, 1)], "WH-01");
+        Assert.Equal(100, scoped!.Kpi!.TaskSuccessRatePercent);
+        Assert.Single(scoped.TaskStates!);
     }
 
     [Fact]
