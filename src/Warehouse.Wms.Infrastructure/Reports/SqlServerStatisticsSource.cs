@@ -17,25 +17,72 @@ public sealed class SqlServerStatisticsSource(IDbContextFactory<WarehouseDbConte
     {
         cancellationToken.ThrowIfCancellationRequested();
         await using var db = await factory.CreateDbContextAsync(cancellationToken);
+        var normalizedWarehouseCode = string.IsNullOrWhiteSpace(warehouseCode) ? null : warehouseCode.Trim();
         var locationRowsQuery = from l in db.Locations.AsNoTracking()
                                 join r in db.Racks.AsNoTracking() on l.RackId equals r.Id
                                 join a in db.Aisles.AsNoTracking() on r.AisleId equals a.Id
                                 join z in db.Zones.AsNoTracking() on a.ZoneId equals z.Id
                                 join w in db.Warehouses.AsNoTracking() on z.WarehouseId equals w.Id
-                                where string.IsNullOrWhiteSpace(warehouseCode) || w.Code == warehouseCode.Trim()
-                                select new { l.Id, l.Capacity };
-        var locationRows = await locationRowsQuery.ToListAsync(cancellationToken);
-        var locationIds = locationRows.Select(x => x.Id).ToHashSet();
-        var balances = await db.InventoryBalances.AsNoTracking().Where(x => string.IsNullOrWhiteSpace(warehouseCode) || (x.LocationId != null && locationIds.Contains(x.LocationId.Value))).Select(x => new InventoryStatisticsFact(x.Quantity, x.WeightKg, x.Status, x.LocationId)).ToListAsync(cancellationToken);
-        var transactions = await db.InventoryTransactions.AsNoTracking().Where(x => x.OccurredAt >= periodStart && x.OccurredAt < periodEnd && (string.IsNullOrWhiteSpace(warehouseCode) || (x.LocationId != null && locationIds.Contains(x.LocationId.Value)) || (x.Type == InventoryTransactionType.Move && ((x.SourceLocationId != null && locationIds.Contains(x.SourceLocationId.Value)) || (x.DestinationLocationId != null && locationIds.Contains(x.DestinationLocationId.Value)))))).Select(x => new TransactionStatisticsFact(x.Type, x.Quantity, x.OccurredAt, x.LocationId, x.SourceLocationId, x.DestinationLocationId)).ToListAsync(cancellationToken);
+                                select new { l.Id, l.Code, l.Capacity, WarehouseCode = w.Code };
+        var scopedLocationIds = normalizedWarehouseCode is null
+            ? locationRowsQuery.Select(x => x.Id)
+            : locationRowsQuery.Where(x => x.WarehouseCode == normalizedWarehouseCode).Select(x => x.Id);
+
+        var balancesQuery = db.InventoryBalances.AsNoTracking();
+        if (normalizedWarehouseCode is not null)
+        {
+            balancesQuery = balancesQuery.Where(x => x.LocationId != null && scopedLocationIds.Contains(x.LocationId.Value));
+        }
+        var balanceTotal = await balancesQuery
+            .GroupBy(_ => 1)
+            .Select(group => new { Quantity = group.Sum(x => x.Quantity), WeightKg = group.Sum(x => x.WeightKg) })
+            .SingleOrDefaultAsync(cancellationToken);
+        IReadOnlyCollection<InventoryStatisticsFact> balances = balanceTotal is null
+            ? []
+            : [new InventoryStatisticsFact(balanceTotal.Quantity, balanceTotal.WeightKg, InventoryStatus.Available, null)];
+
+        var occupiedQuantity = await db.InventoryBalances.AsNoTracking()
+            .Where(x => x.LocationId != null && scopedLocationIds.Contains(x.LocationId.Value))
+            .GroupBy(_ => 1)
+            .Select(group => (decimal?)group.Sum(x => x.Quantity))
+            .SingleOrDefaultAsync(cancellationToken) ?? 0m;
+        var capacity = await (normalizedWarehouseCode is null ? locationRowsQuery : locationRowsQuery.Where(x => x.WarehouseCode == normalizedWarehouseCode))
+            .GroupBy(_ => 1)
+            .Select(group => (decimal?)group.Sum(x => (decimal)x.Capacity))
+            .SingleOrDefaultAsync(cancellationToken) ?? 0m;
+        IReadOnlyCollection<LocationStatisticsFact> locations = [new LocationStatisticsFact(capacity, occupiedQuantity)];
+
+        var transactionsQuery = db.InventoryTransactions.AsNoTracking()
+            .Where(x => x.OccurredAt >= periodStart && x.OccurredAt < periodEnd);
+        if (normalizedWarehouseCode is not null)
+        {
+            transactionsQuery = transactionsQuery.Where(x =>
+                (x.LocationId != null && scopedLocationIds.Contains(x.LocationId.Value)) ||
+                (x.Type == InventoryTransactionType.Move &&
+                    ((x.SourceLocationId != null && scopedLocationIds.Contains(x.SourceLocationId.Value)) ||
+                     (x.DestinationLocationId != null && scopedLocationIds.Contains(x.DestinationLocationId.Value)))));
+        }
+        var transactionTotals = await transactionsQuery
+            .GroupBy(x => x.Type)
+            .Select(group => new { Type = group.Key, Quantity = group.Sum(x => x.Quantity) })
+            .ToListAsync(cancellationToken);
+        IReadOnlyCollection<TransactionStatisticsFact> transactions = transactionTotals
+            .Select(x => new TransactionStatisticsFact(x.Type, x.Quantity, periodStart))
+            .ToArray();
+
         var taskRows = await db.Tasks.AsNoTracking().Where(x => x.UpdatedAt >= periodStart && x.UpdatedAt < periodEnd).Select(x => new { x.Id, x.State, x.UpdatedAt, x.DispatchContextJson }).ToListAsync(cancellationToken);
-        var locationWarehouse = await (from l in db.Locations.AsNoTracking() join r in db.Racks.AsNoTracking() on l.RackId equals r.Id join a in db.Aisles.AsNoTracking() on r.AisleId equals a.Id join z in db.Zones.AsNoTracking() on a.ZoneId equals z.Id join w in db.Warehouses.AsNoTracking() on z.WarehouseId equals w.Id select new { l.Code, WarehouseCode = w.Code }).ToDictionaryAsync(x => x.Code, x => x.WarehouseCode, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var candidateKeys = taskRows.SelectMany(x => TaskContextLocationKeys(x.DispatchContextJson)).ToArray();
+        var candidateCodes = candidateKeys.Where(x => !Guid.TryParse(x, out _)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var candidateIds = candidateKeys.Select(x => Guid.TryParse(x, out var id) ? id : (Guid?)null).Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
+        var locationWarehouseRows = candidateKeys.Length == 0
+            ? []
+            : await locationRowsQuery.Where(x => candidateCodes.Contains(x.Code) || candidateIds.Contains(x.Id)).Select(x => new { x.Id, x.Code, x.WarehouseCode }).ToListAsync(cancellationToken);
+        var locationWarehouse = LocationWarehouseMap(locationWarehouseRows.Select(x => (x.Id, x.Code, x.WarehouseCode)));
         var tasks = taskRows.Select(x => TaskFact(x.Id, x.State, x.UpdatedAt, x.DispatchContextJson, locationWarehouse)).ToArray();
-        var locations = locationRows.Select(x => new LocationStatisticsFact(x.Capacity, balances.Where(b => b.LocationId == x.Id).Sum(b => b.Quantity))).ToArray();
-        return StatisticsAggregation.Build(period, periodStart, periodEnd, sourceVersion, balances, transactions, tasks, locations, warehouseCode?.Trim());
+        return StatisticsAggregation.Build(period, periodStart, periodEnd, sourceVersion, balances, transactions, tasks, locations, normalizedWarehouseCode);
     }
 
-    private static TaskStatisticsFact TaskFact(Guid id, TaskState state, DateTimeOffset updatedAt, string? context, Dictionary<string, string> locations)
+    private static TaskStatisticsFact TaskFact(Guid id, TaskState state, DateTimeOffset updatedAt, string? context, Dictionary<string, string?> locations)
     {
         if (string.IsNullOrWhiteSpace(context)) return new TaskStatisticsFact(id, state, updatedAt);
         try
@@ -50,12 +97,47 @@ public sealed class SqlServerStatisticsSource(IDbContextFactory<WarehouseDbConte
                 .ToArray();
             if (fields.Length == 0 || fields.Any(v => v.ValueKind != System.Text.Json.JsonValueKind.String || string.IsNullOrWhiteSpace(v.GetString()))) return new TaskStatisticsFact(id, state, updatedAt);
             var codes = fields.Select(v => v.GetString()!).ToArray();
-            if (codes.Any(c => !locations.ContainsKey(c))) return new TaskStatisticsFact(id, state, updatedAt);
-            var warehouses = codes.Select(c => locations[c]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (codes.Any(c => !locations.TryGetValue(c, out var warehouse) || warehouse is null)) return new TaskStatisticsFact(id, state, updatedAt);
+            var warehouses = codes.Select(c => locations[c]!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             return warehouses.Length == 1 ? new TaskStatisticsFact(id, state, updatedAt, warehouses[0], true) : new TaskStatisticsFact(id, state, updatedAt);
         }
         catch (System.Text.Json.JsonException) { return new TaskStatisticsFact(id, state, updatedAt); }
         catch (InvalidOperationException) { return new TaskStatisticsFact(id, state, updatedAt); }
+    }
+
+    private static string[] TaskContextLocationKeys(string? context)
+    {
+        if (string.IsNullOrWhiteSpace(context)) return [];
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(context);
+            if (json.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return [];
+            return new[] { "SourceLocation", "sourceLocation", "DestinationLocation", "destinationLocation" }
+                .Where(key => json.RootElement.TryGetProperty(key, out _))
+                .Select(key => json.RootElement.GetProperty(key))
+                .Where(value => value.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
+                .Select(value => value.GetString()!)
+                .ToArray();
+        }
+        catch (System.Text.Json.JsonException) { return []; }
+        catch (InvalidOperationException) { return []; }
+    }
+
+    private static Dictionary<string, string?> LocationWarehouseMap(IEnumerable<(Guid Id, string Code, string WarehouseCode)> locations)
+    {
+        var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var location in locations)
+        {
+            Add(location.Code, location.WarehouseCode);
+            Add(location.Id.ToString("D"), location.WarehouseCode);
+        }
+        return map;
+
+        void Add(string key, string warehouse)
+        {
+            if (map.TryGetValue(key, out var current) && !string.Equals(current, warehouse, StringComparison.OrdinalIgnoreCase)) map[key] = null;
+            else map.TryAdd(key, warehouse);
+        }
     }
 }
 
