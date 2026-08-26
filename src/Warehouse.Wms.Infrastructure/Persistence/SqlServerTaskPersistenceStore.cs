@@ -22,6 +22,17 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
     public async Task<TaskCreateResult> CreateTaskAsync(WarehouseTask task, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        TaskCreateResult? result = null;
+        await ExecuteWithTransientRetryAsync(
+            async () => result = await CreateTaskOnceAsync(task, cancellationToken),
+            cancellationToken,
+            IsTransientLockFailure,
+            ObserveTransientRetry);
+        return result!;
+    }
+
+    private async Task<TaskCreateResult> CreateTaskOnceAsync(WarehouseTask task, CancellationToken cancellationToken)
+    {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var existing = await db.Tasks.SingleOrDefaultAsync(x => x.TaskNumber == task.TaskNumber, cancellationToken);
@@ -95,6 +106,17 @@ public sealed class SqlServerTaskPersistenceStore(IDbContextFactory<WarehouseDbC
     }
 
     public async Task<WarehouseTask> TransitionTaskAsync(string taskNumber, int expectedVersion, TaskState nextState, string operatorName, string reason, string? errorCode = null, DateTimeOffset? occurredAt = null, CancellationToken cancellationToken = default)
+    {
+        WarehouseTask? result = null;
+        await ExecuteWithTransientRetryAsync(
+            async () => result = await TransitionTaskOnceAsync(taskNumber, expectedVersion, nextState, operatorName, reason, errorCode, occurredAt, cancellationToken),
+            cancellationToken,
+            IsTransientLockFailure,
+            ObserveTransientRetry);
+        return result!;
+    }
+
+    private async Task<WarehouseTask> TransitionTaskOnceAsync(string taskNumber, int expectedVersion, TaskState nextState, string operatorName, string reason, string? errorCode, DateTimeOffset? occurredAt, CancellationToken cancellationToken)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);

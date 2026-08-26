@@ -148,15 +148,14 @@ public sealed class TaskPersistenceSqlTests
         var first = new WmsTaskScheduler(firstGateway, persistenceStore: firstStore, workerId: "concurrent-worker-1");
         var second = new WmsTaskScheduler(secondGateway, persistenceStore: secondStore, workerId: "concurrent-worker-2");
 
-        await Task.WhenAll(
-            first.EnqueueAsync(new TaskDispatchRequest(
+        await first.EnqueueAsync(new TaskDispatchRequest(
                 new WarehouseTask("TASK-SQL-CONCURRENT-001", "Putaway"),
                 new DeviceTask("sql-concurrent-idem-1", "TASK-SQL-CONCURRENT-001", "PLC-CONCURRENT-01", "1-1", "2-1", "LP-01", "v1"),
-                DeviceOperationKind.Inbound)),
-            second.EnqueueAsync(new TaskDispatchRequest(
+                DeviceOperationKind.Inbound));
+        await second.EnqueueAsync(new TaskDispatchRequest(
                 new WarehouseTask("TASK-SQL-CONCURRENT-002", "Putaway"),
                 new DeviceTask("sql-concurrent-idem-2", "TASK-SQL-CONCURRENT-002", "PLC-CONCURRENT-01", "1-2", "2-2", "LP-02", "v1"),
-                DeviceOperationKind.Inbound)));
+                DeviceOperationKind.Inbound));
 
         var results = await Task.WhenAll(first.DispatchNextAsync(), second.DispatchNextAsync());
 
@@ -197,7 +196,8 @@ public sealed class TaskPersistenceSqlTests
             new WarehouseTask("TASK-SQL-DEVICES-002", "Putaway"),
             new DeviceTask("sql-devices-idem-2", "TASK-SQL-DEVICES-002", "PLC-DEVICES-02", "1-2", "2-2", "LP-02", "v1"),
             DeviceOperationKind.Inbound);
-        await Task.WhenAll(first.EnqueueAsync(firstRequest), second.EnqueueAsync(secondRequest));
+        await first.EnqueueAsync(firstRequest);
+        await second.EnqueueAsync(secondRequest);
 
         var results = await Task.WhenAll(first.DispatchNextAsync(), second.DispatchNextAsync());
         Assert.All(results, result => Assert.NotNull(result));
@@ -298,7 +298,14 @@ public sealed class TaskPersistenceSqlTests
 
             try
             {
-                await Task.Delay(25, cancellationToken);
+                if (_probe is not null)
+                {
+                    await _probe.WaitForPairAsync(cancellationToken);
+                }
+                else
+                {
+                    await Task.Delay(25, cancellationToken);
+                }
                 return new DeviceOperationResult(task.IdempotencyKey, _submitStatus, "device-task-001");
             }
             finally
@@ -332,6 +339,7 @@ public sealed class TaskPersistenceSqlTests
     {
         private int _active;
         private int _max;
+        private readonly TaskCompletionSource _pairReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int MaxConcurrentSubmits => Volatile.Read(ref _max);
         public void Enter()
         {
@@ -341,7 +349,14 @@ public sealed class TaskPersistenceSqlTests
                 var observed = Volatile.Read(ref _max);
                 if (active <= observed || Interlocked.CompareExchange(ref _max, active, observed) == observed) break;
             }
+
+            if (active >= 2)
+            {
+                _pairReached.TrySetResult();
+            }
         }
         public void Exit() => Interlocked.Decrement(ref _active);
+        public Task WaitForPairAsync(CancellationToken cancellationToken)
+            => _pairReached.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
     }
 }
