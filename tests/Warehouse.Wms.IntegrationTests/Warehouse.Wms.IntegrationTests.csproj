@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Warehouse.Wms.Api\Warehouse.Wms.Api.csproj" />
     <ProjectReference Include="..\..\src\Warehouse.Wms.Infrastructure\Warehouse.Wms.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Warehouse.Wms.Web\Warehouse.Wms.Web.csproj" Aliases="warehouseWeb" />
   </ItemGroup>
 
 </Project>

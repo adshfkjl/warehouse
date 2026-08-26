@@ -22,6 +22,21 @@ $env:Wms__ExternalIntegrationsEnabled = "false"
 
 ERP 连接串可以缺省。未配置真实 PLC 时必须保持 `Simulator`；不要把真实地址、密码或密钥写入仓库。
 
+### Web 同源代理
+
+`Warehouse.Wms.Web` 使用固定版本 YARP 2.2.0，仅代理 `/api/{**catch-all}` 和 `/health/api/{**catch-all}`；后者转发到 API 的 `/health/{**catch-all}`。Web 自身健康检查为 `/health/web/live`，静态文件和 SPA fallback 不会截获代理错误或 API 路径。
+
+开发环境默认上游为 `http://localhost:5054/`（见 `src/Warehouse.Wms.Web/appsettings.Development.json`）。生产必须通过受信任配置或 `ApiProxy__UpstreamBaseUrl` 提供绝对 `http`/`https` 地址，地址不得包含凭据、查询参数或片段；缺失、非法协议或开发默认值会在启动时失败。生产 loopback 上游还必须显式设置 `ApiProxy__AllowLoopbackUpstream=true`。浏览器只能使用同源相对路径，不能通过请求参数选择上游。
+
+分别启动 API 和 Web 进行开发预览：
+
+```powershell
+dotnet run --project src/Warehouse.Wms.Api --launch-profile http
+dotnet run --project src/Warehouse.Wms.Web --urls http://localhost:5055
+```
+
+访问 Web 的 `/health/web/live` 检查 Web 进程，访问 `/health/api/live` 检查代理后的 API；上游不可用返回 `application/problem+json` 的 502，超时返回 504。
+
 ## 快速验证
 
 在仓库根目录执行：

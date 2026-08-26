@@ -81,7 +81,7 @@ dotnet run --project src/Warehouse.Wms.Web --urls http://localhost:5055
 
 管理界面：<http://localhost:5055>
 
-本地预览时 Web 和 API 分别运行；正式部署应通过同源反向代理统一提供页面和 `/api` 接口。
+Web 已内置固定 YARP 2.2.0 同源代理：浏览器只访问相对 `/api/...` 和 `/health/api/...` 路径，生产部署必须配置受信任的 `ApiProxy:UpstreamBaseUrl`（生产 loopback 还需显式 `AllowLoopbackUpstream=true`）。本地预览时 Web 和 API 分别运行，Web 的 `/health/web/live` 与代理后的 `/health/api/live` 用于区分两层健康状态。
 
 ### 数据库迁移
 

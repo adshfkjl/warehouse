@@ -1287,13 +1287,18 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **必须完成：** 保留 `Authorization`、`Content-Type`、`Accept`、`traceparent`、`X-Correlation-ID`、查询参数、请求体和请求取消信号；支持 multipart/下载；上游不可用返回 502、超时返回 504；禁止 POST/PUT/PATCH/DELETE 自动重试；生产缺少上游配置、使用开发默认值或使用非 HTTP/HTTPS 地址时启动失败；生产 loopback 只有在显式配置 `AllowLoopbackUpstream=true` 且上游为受信任地址时允许；前端只能使用相对路径，不能动态决定代理目标。
 
-- [ ] 编写配置、路由优先级、请求转发、失败状态、非幂等重试和前端固定端口检查。
-- [ ] 固定 YARP `2.2.0`，只注册 `/api/{**catch-all}`、`/health/api/{**catch-all}`，Web 自身提供 `/health/web/live`。
-- [ ] 完成定向测试、旧源码哈希校验和 `git diff --check`。
+- [x] 编写配置、路由优先级、请求转发、失败状态、非幂等重试和前端固定端口检查。
+- [x] 固定 YARP `2.2.0`，只注册 `/api/{**catch-all}`、`/health/api/{**catch-all}`，Web 自身提供 `/health/web/live`。
+- [x] 完成定向测试、旧源码哈希校验和 `git diff --check`。
 
 **验收：** `AGENT_VERIFIED`；路由优先级、配置校验、请求头/取消信号、非幂等重试禁用、错误响应和旧系统哈希清单测试通过。
 
-**执行记录：** Task 执行后填写修改文件、YARP 版本、测试命令及结果、配置门禁和门禁状态；未执行前状态为 `PENDING`。
+**执行记录（2026-08-27）：**
+
+- 修改 Web 项目、YARP 2.2.0 依赖、代理路由与错误处理、开发/基础配置、代理路由测试、开发说明、README 和本设计书；`wwwroot/app.js` 已验证仅使用同源相对 `/api/...` 路径，无固定端口或动态目标。
+- 定向测试：`dotnet test tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj --filter FullyQualifiedName~FrontendProxyRoutingTests`，8/8 通过；Web 构建 `dotnet build src/Warehouse.Wms.Web/Warehouse.Wms.Web.csproj --no-restore`，0 警告/0 错误。
+- 配置门禁：无环境配置启动按预期失败；Development 使用 `http://localhost:5054/` 启动成功；生产缺失、开发默认、非法协议、凭据/查询/片段和 loopback 未显式允许均在启动时拒绝。代理不读取请求参数，YARP 默认不启用重试；API 错误由代理转换为 `application/problem+json` 502/504，未做后续双进程传输验收。
+- 旧源码清单校验和 `git diff --check` 在提交前执行；自动化门禁状态：`AGENT_VERIFIED`。生产域名/TLS/认证网关及真实现场网络保持 `HUMAN_PENDING`/`FIELD_PENDING`；Task 9.12B 动态端口和 Task 9.15 浏览器闭环尚未执行。
 
 ### Task 9.12B：双进程代理集成测试和开发启动验证
 
