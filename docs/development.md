@@ -37,6 +37,8 @@ dotnet run --project src/Warehouse.Wms.Web --urls http://localhost:5055
 
 访问 Web 的 `/health/web/live` 检查 Web 进程，访问 `/health/api/live` 检查代理后的 API；上游不可用返回 `application/problem+json` 的 502，超时返回 504。
 
+`5054` 与 `5055` 仅用于上述本机开发双进程冒烟。启动后依次确认 `http://localhost:5055/health/web/live`、`http://localhost:5055/health/api/live` 和 `http://localhost:5055/api/reports/health` 返回预期响应；最后一个请求必须经过 Web 同源端口，不能改为直接访问 API。自动化代理集成测试不使用这些固定端口：临时 API 和 Web 都由 Kestrel 监听 `127.0.0.1:0`，测试结束时停止并释放宿主。
+
 ## 快速验证
 
 在仓库根目录执行：

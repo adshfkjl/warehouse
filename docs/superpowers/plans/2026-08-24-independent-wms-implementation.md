@@ -1315,13 +1315,20 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **目标：** 用 Kestrel 动态端口验证 Web 与临时 API 上游的完整代理闭环，覆盖普通 API、Excel multipart 上传、错误报告下载、API 错误、健康检查分层和 SPA 边界；`5054`/`5055` 只用于开发启动冒烟。
 
-- [ ] 使用 `127.0.0.1:0` 启动和释放临时 API/Web，上游停止、取消和动态端口场景均可重复运行。
-- [ ] 验证 GET/POST、认证头、追踪 ID、multipart 上传、错误报告下载、502/504、健康检查分层和 SPA fallback 边界。
-- [ ] 仅在开发冒烟中使用 `5054`/`5055`，执行完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验。
+- [x] 使用 `127.0.0.1:0` 启动和释放临时 API/Web，上游停止、取消和动态端口场景均可重复运行。
+- [x] 验证 GET/POST、认证头、追踪 ID、multipart 上传、错误报告下载、502/504、健康检查分层和 SPA fallback 边界。
+- [x] 仅在开发冒烟中使用 `5054`/`5055`，执行完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验。
 
 **验收：** `AGENT_VERIFIED`；动态端口集成测试、开发双进程冒烟、完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验通过。真实域名、TLS、认证网关和现场网络策略保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
-**执行记录：** Task 执行后填写动态端口、双进程日志、测试数量、冒烟响应和门禁状态；未执行前状态为 `PENDING`。
+**执行记录（2026-08-27）：**
+
+- 新增 `FrontendProxyIntegrationTests`，每个场景以 Kestrel `127.0.0.1:0` 启动临时 API 与真实 Web 宿主；Web 从构建输出启动并在测试结束时终止，API 调用 `StopAsync` 与 `DisposeAsync`。定向测试不绑定 `5054`/`5055`。
+- 定向测试 `dotnet test tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj --filter "FullyQualifiedName~FrontendProxyIntegrationTests|FullyQualifiedName~ManagementWebTests" --no-restore`：13/13 通过。覆盖 GET 查询、JSON POST、Authorization/Accept/traceparent/X-Correlation-ID、响应内容类型、取消传播、multipart Excel 文件名/字节、错误报告下载字节/Content-Disposition、API 404 不回退 SPA、静态/SPA 路由、Web/API 分层健康检查、停止上游 502、慢上游 504，以及 POST/PUT/PATCH/DELETE 单次上游发送。
+- 停止上游诊断：`StopAsync`/`DisposeAsync` 后 TCP 探针返回 `ConnectionRefused`；Windows 拒绝连接可能晚于 1 秒，故夹具将活动超时设为 4 秒、慢响应设为 7 秒，避免把连接拒绝误分类为超时。断言不依赖探针耗时。
+- 开发冒烟仅使用 API `http://localhost:5054` 与 Web `http://localhost:5055`；`/health/live`、Web `/health/web/live`、Web `/health/api/live`、以及经过 Web 的相对 `/api/reports/health` 均为 HTTP 200，进程随后停止。
+- 完整质量门禁：`dotnet restore Warehouse.Wms.sln` 退出码 0；`dotnet build Warehouse.Wms.sln --no-restore` 退出码 0（0 警告/0 错误）；`dotnet test Warehouse.Wms.sln --no-build --no-restore` 通过 Unit 149（2 跳过）、Integration 81（25 跳过）、Device Contract 37；`pwsh -NoProfile -File scripts/verify-legacy-source.ps1` 退出码 0（133 文件）；`pwsh -NoProfile -File scripts/verify.ps1` 输出 `Quality gate passed.`（退出码 0），Docker SQL 容器迁移已是最新，健康检查和旧目录保护通过；`git diff --check` 通过。
+- 门禁状态：`AGENT_VERIFIED`。生产域名、TLS、认证网关与网络策略为 `HUMAN_PENDING`；真实 PLC、现场网络及账实验证为 `FIELD_PENDING`。
 
 ### Task 9.13：身份、刷新令牌与审计 SQL 持久化
 

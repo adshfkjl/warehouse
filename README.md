@@ -83,6 +83,8 @@ dotnet run --project src/Warehouse.Wms.Web --urls http://localhost:5055
 
 Web 已内置固定 YARP 2.2.0 同源代理：浏览器只访问相对 `/api/...` 和 `/health/api/...` 路径，生产部署必须配置受信任的 `ApiProxy:UpstreamBaseUrl`（生产 loopback 还需显式 `AllowLoopbackUpstream=true`）。本地预览时 Web 和 API 分别运行，Web 的 `/health/web/live` 与代理后的 `/health/api/live` 用于区分两层健康状态。
 
+固定 `5054`/`5055` 只服务于本地开发双进程冒烟；自动化代理验收始终让临时 API 和 Web 分别监听 Kestrel `127.0.0.1:0`，覆盖真实同源 HTTP 转发而不占用开发端口。
+
 ### 数据库迁移
 
 开发数据库连接和迁移方式见 [`docs/development.md`](docs/development.md)。数据库结构通过 EF Core 迁移管理，不需要手工修改表结构。
