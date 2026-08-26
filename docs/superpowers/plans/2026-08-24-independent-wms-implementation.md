@@ -1232,23 +1232,82 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** terra 提交 `f2aa318`，将库存余额数量/重量、库位容量/占用和周期流水按 SQL 投影聚合；任务上下文只读取周期内必要 JSON，库位归属同时支持库位编码和 `LocationId.ToString("D")` GUID，指定仓库的出库按库位、移库按源/目标库位纳入。新增 SQL 命令拦截器断言余额/流水查询含 `SUM`，以及大数据量、Move 源/目标范围、GUID 任务归属回归测试。主代理独立验证：Task 9.11 定向 SQL 测试 5/5 通过；`dotnet restore`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false` 构建 0 警告/0 错误；全量 Unit 148 通过/2 跳过、Integration 75 通过、Device Contract 37 通过；Docker SQL 迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；`scripts/verify.ps1` 通过。旧 `warehouse/` 目录未出现在 tracked diff；该目录当前为未跟踪参考源码，内容变更无法由 Git 历史直接证明，继续保持只读人工审计项。该历史 diff 仅保留为当时的过程记录，从 Task 9.12A 起不再作为完整性证据，统一改用 `docs/legacy-source-manifest.sha256` 和校验脚本。自动化状态：`AGENT_VERIFIED`。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
+- 自动化状态：`AGENT_VERIFIED`。
+- 后续完整性前置：必须先执行 Task 9.11A，建立并验证旧系统 SHA-256 基线；Task 9.11A 不能被 Task 9.12A 顺手合并完成。
+
+### Task 9.11A：建立旧系统完整性基线
+
+**前置条件：** Task 9.11 已达到 `AGENT_VERIFIED`；不连接生产 PLC、ERP 或数据库，不修改 `warehouse/`。
+
+**Files:**
+- Create: `docs/legacy-source-manifest.sha256`
+- Create: `scripts/verify-legacy-source.ps1`
+- Modify: `scripts/verify.ps1`
+- Create: `tests/LegacySourceManifest.Tests.ps1`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
+
+- [ ] **Step 1: Define the manifest contract and failing checks.** 清单使用相对 `warehouse/` 根目录的 POSIX 路径，按路径稳定排序并记录 SHA-256；检测文件新增、删除和内容变化；缺少清单、重复路径、非法哈希或格式错误必须失败；校验脚本只能读取和比较，不得自动生成或覆盖清单。
+- [ ] **Step 2: Reject path escapes.** 遍历时拒绝 `ReparsePoint`/符号链接和解析后不在 `warehouse/` 根目录内的路径；只排除路径中明确名为 `bin` 或 `obj` 的生成目录，其他目录和文件不得静默排除。
+- [ ] **Step 3: Implement and test verification.** 新增 PowerShell 校验脚本，返回非零退出码表示清单缺失、文件新增/删除、内容变化、符号链接逃逸或清单格式错误；为每种情况准备隔离临时 fixture，断言脚本不会改写原清单。
+- [ ] **Step 4: Integrate the gate.** 将 `scripts/verify-legacy-source.ps1` 接入 `scripts/verify.ps1`；脚本支持显式 `-ManifestPath` 和 `-LegacyRoot` 参数，默认只读取仓库内固定路径，禁止从浏览器、环境变量或请求参数动态决定根目录。
+- [ ] **Step 5: Establish and qualify the baseline.** 以 `2026-08-27` 作为清单建立日期；首次生成后必须与可信备份或现场原始副本抽样/全量核对。清单只能证明建立基线之后未发生变化，不能倒推证明此前从未被 Agent 修改；无法完成来源核对时标记 `HUMAN_PENDING`，不得宣称历史完整性已证明。
+- [ ] **Step 6: Run verification and record evidence.** 执行 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1`、`pwsh -NoProfile -File scripts/verify-legacy-source.ps1`、`pwsh -NoProfile -File scripts/verify.ps1` 和 `git diff --check`；记录文件数量、哈希结果、来源核对结果和退出码。
+
+**验收：** `AGENT_VERIFIED`（脚本、排除规则、变化检测和质量门禁通过）；来源副本核对另记录 `HUMAN_PENDING`/`HUMAN_CONFIRMED`。清单缺失或不匹配必须阻断后续 Task，验证脚本不得自动重新生成清单。
+
+**执行记录：** Task 执行后填写清单建立日期、文件计数、测试命令及结果、来源副本核对证据和门禁状态；未执行前状态为 `PENDING`。
+
 ### Task 9.12A：代理路由、配置与安全边界
 
-**前置条件：** Task 8.2 和 Task 9.11 已达到 `AGENT_VERIFIED`；先建立 `docs/legacy-source-manifest.sha256` 和 `scripts/verify-legacy-source.ps1`，不得连接生产 API、ERP、数据库或 PLC，不得修改旧 `warehouse/`。专项施工计划见 [`docs/superpowers/plans/2026-08-26-api-web-proxy.md`](2026-08-26-api-web-proxy.md)。
+**前置条件：** Task 8.2、Task 9.11 和 Task 9.11A 已达到 `AGENT_VERIFIED`；不得连接生产 API、ERP、数据库或 PLC，不得修改旧 `warehouse/`。专项施工计划见 [`docs/superpowers/plans/2026-08-26-api-web-proxy.md`](2026-08-26-api-web-proxy.md)。
+
+**Files:**
+- Modify: `src/Warehouse.Wms.Web/Warehouse.Wms.Web.csproj`
+- Modify: `src/Warehouse.Wms.Web/Program.cs`
+- Create: `src/Warehouse.Wms.Web/appsettings.json`
+- Create: `src/Warehouse.Wms.Web/appsettings.Development.json`
+- Modify: `src/Warehouse.Wms.Web/wwwroot/app.js`
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Web/FrontendProxyRoutingTests.cs`
+- Modify: `docs/development.md`
+- Modify: `README.md`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
 
 **目标：** 使用固定版本 YARP（`2.2.0`）为 `Warehouse.Wms.Web` 增加受信任配置驱动的同源代理。只允许 `/api/{**catch-all}` 和 `/health/api/{**catch-all}`，Web 自身提供 `/health/web/live`，禁止泛化 `/health/` 代理、开放代理和 SPA fallback 截获 API 错误。
 
-**必须完成：** 保留 `Authorization`、`Content-Type`、`Accept`、`traceparent`、`X-Correlation-ID`、查询参数、请求体和请求取消信号；支持 multipart/下载；上游不可用返回 502、超时返回 504；禁止 POST/PUT/PATCH/DELETE 自动重试；生产缺失、非法或 loopback 默认上游时启动失败；前端只能使用相对路径。
+**必须完成：** 保留 `Authorization`、`Content-Type`、`Accept`、`traceparent`、`X-Correlation-ID`、查询参数、请求体和请求取消信号；支持 multipart/下载；上游不可用返回 502、超时返回 504；禁止 POST/PUT/PATCH/DELETE 自动重试；生产缺少上游配置、使用开发默认值或使用非 HTTP/HTTPS 地址时启动失败；生产 loopback 只有在显式配置 `AllowLoopbackUpstream=true` 且上游为受信任地址时允许；前端只能使用相对路径，不能动态决定代理目标。
+
+- [ ] 编写配置、路由优先级、请求转发、失败状态、非幂等重试和前端固定端口检查。
+- [ ] 固定 YARP `2.2.0`，只注册 `/api/{**catch-all}`、`/health/api/{**catch-all}`，Web 自身提供 `/health/web/live`。
+- [ ] 完成定向测试、旧源码哈希校验和 `git diff --check`。
 
 **验收：** `AGENT_VERIFIED`；路由优先级、配置校验、请求头/取消信号、非幂等重试禁用、错误响应和旧系统哈希清单测试通过。
+
+**执行记录：** Task 执行后填写修改文件、YARP 版本、测试命令及结果、配置门禁和门禁状态；未执行前状态为 `PENDING`。
 
 ### Task 9.12B：双进程代理集成测试和开发启动验证
 
 **前置条件：** Task 9.12A 达到 `AGENT_VERIFIED`；继续使用旧系统 SHA-256 清单，不得使用固定测试端口。
 
+**Files:**
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Web/ManagementWebTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Web/FrontendProxyIntegrationTests.cs`
+- Modify: `docs/development.md`
+- Modify: `README.md`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
+
 **目标：** 用 Kestrel 动态端口验证 Web 与临时 API 上游的完整代理闭环，覆盖普通 API、Excel multipart 上传、错误报告下载、API 错误、健康检查分层和 SPA 边界；`5054`/`5055` 只用于开发启动冒烟。
 
+- [ ] 使用 `127.0.0.1:0` 启动和释放临时 API/Web，上游停止、取消和动态端口场景均可重复运行。
+- [ ] 验证 GET/POST、认证头、追踪 ID、multipart 上传、错误报告下载、502/504、健康检查分层和 SPA fallback 边界。
+- [ ] 仅在开发冒烟中使用 `5054`/`5055`，执行完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验。
+
 **验收：** `AGENT_VERIFIED`；动态端口集成测试、开发双进程冒烟、完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验通过。真实域名、TLS、认证网关和现场网络策略保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**执行记录：** Task 执行后填写动态端口、双进程日志、测试数量、冒烟响应和门禁状态；未执行前状态为 `PENDING`。
 
 ### Task 9.13：身份、刷新令牌与审计 SQL 持久化
 
@@ -1256,11 +1315,35 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **允许修改范围：** `src/Warehouse.Wms.Application/Identity/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、`src/Warehouse.Wms.Api/Program.cs`、身份/审计控制器、EF 迁移、身份单元/SQL 集成测试、`PROJECT_DESIGN.md`、本计划和操作说明；不得修改旧 `warehouse/`。
 
-**必须完成：** 将用户、角色、权限、仓库范围、PBKDF2 哈希参数、刷新令牌摘要/过期/撤销/轮换、账号禁用、高风险二次授权和追加式审计写入 SQL；审计不得提供静默更新/删除；生产 JWT 密钥缺失、过短或等于开发默认值时启动失败。
+**Files/Test:**
+- Create/Modify: `src/Warehouse.Wms.Application/Identity/`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/IdentityPersistence.cs`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/AuditPersistence.cs`
+- Modify: `src/Warehouse.Wms.Api/Program.cs`
+- Create: `tests/Warehouse.Wms.UnitTests/Identity/IdentityPersistenceTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentitySqlPersistenceTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentityBootstrapAndCookieTests.cs`
+- Create: `src/Warehouse.Wms.Api/Commands/CreateInitialAdminCommand.cs`
+- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_IdentityAuditPersistence.cs`
+- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_IdentityAuditPersistence.Designer.cs`
+- Modify: `src/Warehouse.Wms.Infrastructure/Migrations/WarehouseDbContextModelSnapshot.cs`
+
+**必须完成：** 将用户、角色、权限、仓库范围、PBKDF2 哈希参数、刷新令牌摘要/过期/撤销/轮换、账号禁用、高风险二次授权和追加式审计写入 SQL；审计不得提供静默更新/删除；生产 JWT 密钥缺失、过短或等于开发默认值时启动失败。空数据库只能通过一次性本地管理命令 `dotnet run --project src/Warehouse.Wms.Api -- identity create-admin --username <name>` 创建第一个管理员，密码必须通过安全输入获得；已有管理员时命令拒绝执行，初始化成功后不存在默认账号密码或可重复初始化令牌。
+
+**浏览器令牌策略：** 短期访问令牌只保存在浏览器内存；刷新令牌由 API 设置 `HttpOnly`、`Secure`、`SameSite=Lax/Strict` Cookie，限定到刷新接口路径，前端脚本不可读取长期令牌。退出同时撤销服务端令牌并清除 Cookie；生产环境不得把刷新令牌写入 `localStorage`。
 
 **测试：** 服务重启后用户/角色仍可登录；重复刷新和旧令牌重放被拒绝；注销和账号禁用立即生效；并发刷新只有一个新令牌有效；高风险授权和审计记录可追溯；生产密钥门禁启动失败；Docker SQL 迁移可重复执行。
 
+- [ ] 测试初始管理员一次性创建、已有管理员拒绝重复初始化、无默认密码和安全密码输入。
+- [ ] 测试脚本无法读取刷新 Cookie、退出后 Cookie/服务端令牌失效、旧刷新令牌重放失败。
+- [ ] 为登录失败增加基本限流或账号失败锁定，并测试达到阈值后的拒绝和恢复策略。
+- [ ] 将用户、角色、权限、仓库范围、令牌摘要和追加式审计全部注册为 SQL 持久化实体，禁止生产隐式回退 InMemory。
+- [ ] 以短期内存访问令牌和 HttpOnly 刷新 Cookie 完成登录、刷新、退出和账号禁用流程。
+- [ ] 在生产配置下拒绝缺失、过短或开发默认 JWT 密钥。
+
 **验收：** `AGENT_VERIFIED`；不得以 InMemory 身份/审计实现作为生产完成证据。角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**执行记录：** Task 执行后填写迁移、管理员初始化方式、Cookie 属性、限流策略、测试结果和门禁状态；未执行前状态为 `PENDING`。
 
 ### Task 9.14：异常工作项与 Excel 导入幂等持久化
 
@@ -1268,11 +1351,33 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **允许修改范围：** `src/Warehouse.Wms.Domain/Exceptions/`、`src/Warehouse.Wms.Application/Exceptions/`、`src/Warehouse.Wms.Application/Import/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、相关 API 控制器、EF 迁移、异常/导入单元与 SQL 集成测试、`PROJECT_DESIGN.md`、本计划和操作说明；不得修改 PLC 时序或旧 `warehouse/`。
 
-**必须完成：** SQL 持久化异常、资源快照、设备观察、处置历史、操作审计和关闭状态；重启恢复未关闭异常，`PhysicalStateUnknown` 保持资源锁定，重复告警只创建一个活动工作项，多人并发处置只有一方成功，异常关闭与任务/资源锁一致。持久化导入来源键、文件 SHA-256、关联入库/出库单和错误报告引用；错误报告可按保留期清理，但幂等记录不可只存内存。
+**Files/Test:**
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/ExceptionPersistence.cs`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/ImportPersistence.cs`
+- Create/Modify: `src/Warehouse.Wms.Application/Exceptions/ExceptionWorkItemService.cs`
+- Create/Modify: `src/Warehouse.Wms.Application/Import/SpreadsheetImportService.cs`
+- Create: `tests/Warehouse.Wms.UnitTests/Exceptions/ExceptionPersistenceTests.cs`
+- Create: `tests/Warehouse.Wms.UnitTests/Import/ImportPersistenceTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Exceptions/ExceptionSqlPersistenceTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Import/ImportSqlPersistenceTests.cs`
+- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_ExceptionImportPersistence.cs`
+- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_ExceptionImportPersistence.Designer.cs`
+- Modify: `src/Warehouse.Wms.Infrastructure/Migrations/WarehouseDbContextModelSnapshot.cs`
+
+**必须完成：** SQL 持久化异常、资源快照、设备观察、处置历史、操作审计和关闭状态；重启恢复未关闭异常，`PhysicalStateUnknown` 保持资源锁定，重复告警只创建一个活动工作项，多人并发处置只有一方成功。异常状态更新、任务状态更新、资源锁释放、库存校正流水和审计记录必须在一个明确的短 SQL 事务中提交；若跨聚合无法共用事务，必须采用带 Outbox/Inbox、状态历史和重启补偿的可恢复编排，禁止先关闭异常再无保护地释放锁。
+
+持久化导入来源键、文件 SHA-256、关联入库/出库单和错误报告。错误报告采用 SQL 小型内容存储：保存内容、内容类型、原始文件名、摘要、字节大小和 `ExpiresAt`，单份报告有配置化大小上限；下载使用数据库内容，不拼接用户输入路径，避免路径穿越。过期清理只能删除报告内容，不能删除导入幂等记录或关联单据。
 
 **测试：** 异常重启恢复、未知物理状态锁定、重复告警合并、并发处置冲突、事务回滚；服务重启后重复上传同一文件不重复建单，来源键绑定不同文件被拒绝，错误报告可下载且关联原始导入记录。
 
+- [ ] 注入异常关闭、任务更新、锁释放、库存校正或审计任一步骤失败，验证短事务整体回滚或可恢复编排最终收敛。
+- [ ] 测试错误报告内容、摘要、大小、过期时间、下载响应和清理边界；清理后导入幂等记录仍可查询且重复上传不建单。
+- [ ] 验证异常状态、业务任务、资源锁、库存校正流水和审计在同一短事务或可恢复编排中一致提交。
+- [ ] 验证错误报告不通过用户输入路径读取，清理报告内容不删除导入幂等记录和关联单据。
+
 **验收：** `AGENT_VERIFIED`；异常和导入记录可跨进程恢复并可审计。真实设备对账和现场处置仍为 `FIELD_PENDING`。
+
+**执行记录：** Task 执行后填写迁移、事务边界/编排方案、错误报告存储策略、重启/并发/清理测试结果和门禁状态；未执行前状态为 `PENDING`。
 
 ### Task 9.15：Web 真实业务接入与端到端验收
 
@@ -1280,9 +1385,51 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **允许修改范围：** `src/Warehouse.Wms.Web/wwwroot/`、Web 代理配置、必要的 API 契约适配、`tests/Warehouse.Wms.IntegrationTests/Web/`、Playwright 或等价浏览器测试、`docs/user-guide.md`、`PROJECT_DESIGN.md`、本计划；不得在浏览器实现 PLC 时序或直接写数据库/寄存器。
 
+**Files/Test:**
+- Modify: `src/Warehouse.Wms.Web/wwwroot/index.html`
+- Modify: `src/Warehouse.Wms.Web/wwwroot/app.js`
+- Modify: `src/Warehouse.Wms.Web/wwwroot/styles.css`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Web/WmsBrowserE2eTests.cs`（若采用 Playwright，使用 `tests/Warehouse.Wms.IntegrationTests/Web/playwright/wms-business.spec.ts`，二选一并在执行记录中注明）
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Web/ManagementWebTests.cs`
+- Modify: `docs/user-guide.md`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
+
 **必须完成的浏览器闭环：** 登录；创建入库单；收货与托盘绑定；模拟设备上架；查询库存；创建出库单、分配和复核；模拟设备下架并扣减库存；移库；盘点差异审批；异常处置。还必须覆盖权限拒绝、重复点击不重复建单、Token 刷新/退出、API 502/504、`PhysicalStateUnknown` 展示，以及浏览器刷新后从 API/SQL 恢复数据。
 
+- [ ] 浏览器只通过 Web 同源端口访问 API，完成上述核心流程并断言页面状态来自持久化 API。
+- [ ] 断言重复点击不会重复建单，权限不足显示拒绝，API 502/504 和物理未知显示可操作的异常状态。
+- [ ] 断言刷新令牌 Cookie 不可由脚本读取，退出后刷新失败，浏览器刷新页面后任务/库存/异常仍可恢复。
+- [ ] 使用 Web 同源端口完成登录、入库、出库、移库、盘点和异常处置，不得绕过代理直接调用 API。
+- [ ] 使用模拟设备网关验证设备成功、失败和 `PhysicalStateUnknown` 在页面上的状态映射。
+
 **验收：** `AGENT_VERIFIED`；Playwright 或等价浏览器测试通过，测试通过 Web 端口而非直接调用 API；核心业务状态、错误提示和权限行为与 API 契约一致。负责人按操作说明确认页面行为后才可进入 `HUMAN_CONFIRMED`，真实 PLC/现场账实仍为 `FIELD_PENDING`。
+
+**执行记录：** Task 执行后填写浏览器、API、数据库和模拟网关版本，核心流程截图/日志、测试结果和门禁状态；未执行前状态为 `PENDING`。
+
+### Task 9.16：最终生产式组合和恢复验收
+
+**前置条件：** Task 9.11A、9.12A、9.12B、9.13、9.14 和 9.15 均达到 `AGENT_VERIFIED`；只使用开发 SQL Server 和模拟设备网关，不连接真实 PLC、ERP 或生产数据库。
+
+**Files/Test:**
+- Create: `tests/Warehouse.Wms.IntegrationTests/Final/ProductionLikeRecoveryTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Final/DatabaseBackupRestoreTests.ps1`
+- Modify: `scripts/verify.ps1`
+- Modify: `scripts/verify-legacy-source.ps1`
+- Modify: `docs/development.md`
+- Modify: `docs/user-guide.md`
+- Modify: `PROJECT_DESIGN.md`
+- Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
+
+- [ ] 从空数据库执行全部 EF 迁移，执行一次性管理员初始化，确认缺少生产 JWT 密钥时生产配置启动失败。
+- [ ] 同时启动 API、Web 和 Worker，通过浏览器完成入库、出库、移库和异常流程。
+- [ ] 在设备任务执行中停止并重启 API/Worker，验证任务、资源锁、异常、用户、审计和 Excel 导入幂等记录恢复；`PhysicalStateUnknown` 仍保持锁定。
+- [ ] 执行 SQL Server 备份与恢复到独立测试数据库，重新运行浏览器冒烟并核对库存、任务、异常、审计和导入记录。
+- [ ] 运行完整 restore/build/test、依赖漏洞检查、Docker 迁移、`scripts/verify.ps1` 和旧源码 SHA-256 校验；记录所有退出码和测试数量。
+
+**验收：** `AGENT_VERIFIED`；最终组合在空库、重启、备份恢复和浏览器冒烟下均通过。该 Task 证明软件组合可恢复，不替代负责人业务确认、真实 PLC 回归、现场断网/断电和账实核对。
+
+**执行记录：** Task 执行后填写数据库/服务版本、迁移结果、管理员初始化、重启时间线、备份恢复摘要、浏览器流程和质量门禁结果；未执行前状态为 `PENDING`。
 
 ## 十三、阶段门禁和最终标准
 
@@ -1298,6 +1445,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - **门禁 H：** Task 9.12A/9.12B 的代理安全边界、分层健康检查、动态端口双进程测试和旧系统哈希校验通过。
 - **门禁 I：** Task 9.13/9.14 的身份、刷新令牌、审计、异常工作项和 Excel 导入幂等已通过 SQL 重启/并发/重放测试；不得以 InMemory 实现替代。
 - **门禁 J：** Task 9.15 的 Web 浏览器端到端核心作业通过；负责人确认前端行为后才进入 `HUMAN_CONFIRMED`，真实 PLC 和账实核对仍需 `FIELD_VERIFIED`。
+- **门禁 K：** Task 9.16 的空库迁移、管理员初始化、API/Web/Worker 组合、重启恢复、备份恢复、浏览器冒烟、依赖漏洞检查和旧源码哈希校验全部通过；该门禁仍不代表现场完成。
 
 ### 13.2 第一版完成标准
 
@@ -1311,5 +1459,6 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 取消、停止、物理状态未知和人工确认均不会错误释放库存或把任务伪装成成功。
 - 身份、刷新令牌、审计、异常工作项和 Excel 导入幂等记录在服务重启后可恢复，并具备并发/重放测试证据。
 - Web 通过同源代理和浏览器端到端测试完成核心仓储作业，不仅是静态页面或 HTML 文本检查。
+- 最终组合可从空数据库启动，安全初始化管理员，完成 API/Web/Worker 组合流程，并在服务重启和数据库备份恢复后再次通过浏览器冒烟。
 - 现场试点、账实核对、回滚演练和负责人签字完成。
-- 每次 Task 和最终验收均通过 `docs/legacy-source-manifest.sha256` 的 SHA-256 校验，证明旧 `warehouse/` 目录未被新系统修改。
+- 每次 Task 和最终验收均通过 `docs/legacy-source-manifest.sha256` 的 SHA-256 校验，证明 2026-08-27 建立基线之后旧 `warehouse/` 目录未被新系统修改；基线建立之前的历史完整性必须另有可信副本核对证据。
