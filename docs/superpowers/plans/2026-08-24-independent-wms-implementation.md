@@ -12,7 +12,7 @@
 
 ## 一、执行方式和 Agent 协议
 
-这份文件是总路线图，不允许 Agent 从第一项连续执行到现场上线。每次只执行一个 `Task`，完成后暂停，提交证据并等待人工批准进入下一项。
+这份文件是总路线图，不允许 Agent 把多个未验收的 Task 合并成一次大改动，也不允许自动执行到现场上线。每次只执行一个 `Task`；达到 `AGENT_VERIFIED` 后可按本计划顺序自动进入下一个纯软件 Task，遇到 `HUMAN_CONFIRMED` 或 `FIELD_VERIFIED` 门禁才暂停并等待负责人确认。
 
 ### 1.1 单 Task 执行协议
 
@@ -24,7 +24,7 @@
 4. 只修改本 Task 的文件范围；旧系统 `warehouse/` 只读。
 5. 运行该 Task 明确列出的命令，记录退出码、测试数和失败信息。
 6. 更新设计书、迁移、API 契约、测试和操作说明，使其保持一致。
-7. 不自动进入下一 Task，不自动执行现场操作，不自动修改旧 PLC 时序。
+7. `AGENT_VERIFIED` 后可自动进入计划中下一个 Task，但不得跨越人工/现场门禁；不得自动执行现场操作、启用真实 PLC 适配或修改旧 PLC 时序。
 
 每个 Task 结束时必须输出：
 
@@ -49,9 +49,13 @@
 - `FIELD_VERIFIED`：在真实 PLC/设备上完成受控回归、断网/重启/异常恢复和账实核对。
 - `BLOCKED`：依赖现场事实、设备响应或人工签字，Agent 不得自行推断继续。
 
-阶段 0 和阶段 7.2 的现场事实必须由人员确认。没有现场签字、设备回归记录或责任人批准时，状态只能是 `BLOCKED`，不能标记为完成。
+阶段 0 和阶段 7.2 的现场事实必须由人员确认。未确认的现场事实可以在模拟器和显式配置边界内继续软件开发，但不得启用真实 PLC 适配、不得宣称现场完成；到 `HUMAN_CONFIRMED`/`FIELD_VERIFIED` 门禁时必须暂停。没有现场签字、设备回归记录或责任人批准时，现场门禁状态只能是 `BLOCKED`。
 
-### 1.3 统一本地验收命令
+### 1.3 旧系统完整性清单
+
+`warehouse/` 为未跟踪的现场参考源码，不能用 `git diff` 证明其未被修改。执行第一个剩余 Task 前必须生成 `docs/legacy-source-manifest.sha256`，并提供 `scripts/verify-legacy-source.ps1` 以稳定排序的相对路径计算 SHA-256；每个后续 Task、阶段门禁和最终验收都重新计算并比较。清单差异时任务状态为 `BLOCKED`，不得删除、覆盖或重新生成清单来掩盖差异；`bin/`、`obj/` 和临时构建目录不纳入清单。
+
+### 1.4 统一本地验收命令
 
 所有“构建通过”必须至少执行：
 
@@ -521,7 +525,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `AGENT_VERIFIED`；阶段 5 的“进入异常处置”均有真实实体、服务、接口和测试承接；未解决的物理未知任务不能被异常中心直接改成成功。
 
-**Task 4.5 执行证据（2026-08-25）：** 新增异常工作项领域实体、来源/类型/严重程度/物理状态和资源快照；应用服务提供 `source + externalKey + taskId` 合并、关闭后重开、动作授权和未知状态保护；API 契约位于 `api/exceptions`。异常仓储和动作执行器当前为显式内存实现，尚未接入 SQL Server、Outbox/Inbox、真实用户/JWT 或现场设备对账，不能作为生产完成证据。异常单元测试 6 个、幂等集成测试 1 个通过；额外验证未知物理状态不得以 `Closed + Unknown` 关闭；解决方案构建无警告/错误。
+**Task 4.5 执行证据（2026-08-25）：** 新增异常工作项领域实体、来源/类型/严重程度/物理状态和资源快照；应用服务提供 `source + externalKey + taskId` 合并、关闭后重开、动作授权和未知状态保护；API 契约位于 `api/exceptions`。异常仓储和动作执行器当前为显式内存实现，尚未接入 SQL Server、Outbox/Inbox、真实用户/JWT 或现场设备对账，不能作为生产完成证据；该持久化缺口由 Task 9.14 负责关闭。异常单元测试 6 个、幂等集成测试 1 个通过；额外验证未知物理状态不得以 `Closed + Unknown` 关闭；解决方案构建无警告/错误。
 
 ## 八、阶段 5：入库、出库和移库业务闭环
 
@@ -566,7 +570,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `AGENT_VERIFIED`；Excel 导入与手工建单使用相同领域服务，错误报告可下载，导入不依赖 ERP。
 
-**Task 5.1A 执行证据（2026-08-25）：** 新增版本 `1.0` 的入库/出库 `.xlsx` 模板、`SpreadsheetImportService`、CSV 错误报告下载 API 和导入控制器。导入按来源键和文件 SHA-256 摘要幂等；模板版本、列顺序、必填字段、GUID、数量精度、批次/有效期、托盘重复和数量上限在创建单据前整批校验，错误行不会部分创建。入库复用 `InboundOrderService` 生成待入库收货记录，出库复用 `OutboundAllocationService` 只创建 `Draft` 单据；服务没有设备网关依赖，不提交 PLC。新增单元及 API 控制器测试，当前导入记录和错误报告为内存实现，真实数据库持久化仍待后续任务。
+**Task 5.1A 执行证据（2026-08-25）：** 新增版本 `1.0` 的入库/出库 `.xlsx` 模板、`SpreadsheetImportService`、CSV 错误报告下载 API 和导入控制器。导入按来源键和文件 SHA-256 摘要幂等；模板版本、列顺序、必填字段、GUID、数量精度、批次/有效期、托盘重复和数量上限在创建单据前整批校验，错误行不会部分创建。入库复用 `InboundOrderService` 生成待入库收货记录，出库复用 `OutboundAllocationService` 只创建 `Draft` 单据；服务没有设备网关依赖，不提交 PLC。新增单元及 API 控制器测试，当前导入记录和错误报告为内存实现，服务重启后无法证明重复上传不重复建单；Task 9.14 必须持久化来源键、文件摘要、关联单据和错误报告保留策略后，才算生产可用。
 
 - 自动化状态：`AGENT_VERIFIED`。
 - 外部门禁：`HUMAN_PENDING`（模板列、数量精度和导入操作待负责人确认）；`FIELD_PENDING`（真实设备和账实流程未执行）。
@@ -743,7 +747,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `AGENT_VERIFIED`；未授权用户无法执行高风险操作，审计可追溯。
 
-**Task 6.3 执行证据（2026-08-25）：** 新增 `IIdentityService`、`InMemoryIdentityService`、身份契约和 API 用户/角色控制器；开发 API 接入 JWT Bearer、`ICurrentUser` 仓库范围和统一异常状态码。实现 PBKDF2 密码哈希、JWT 访问令牌、一次性刷新令牌、注销、改密、账号禁用、角色分配、权限授予、仓库范围校验和高风险二次授权；`IAuditLog` 记录登录、刷新、注销、改密、禁用、角色/权限变更、设备任务和高风险授权。身份集成测试 6 个通过，API 健康检查为 200，匿名高风险接口为 401。
+**Task 6.3 执行证据（2026-08-25）：** 新增 `IIdentityService`、`InMemoryIdentityService`、身份契约和 API 用户/角色控制器；开发 API 接入 JWT Bearer、`ICurrentUser` 仓库范围和统一异常状态码。实现 PBKDF2 密码哈希、JWT 访问令牌、一次性刷新令牌、注销、改密、账号禁用、角色分配、权限授予、仓库范围校验和高风险二次授权；`IAuditLog` 记录登录、刷新、注销、改密、禁用、角色/权限变更、设备任务和高风险授权。身份集成测试 6 个通过，API 健康检查为 200，匿名高风险接口为 401；用户、角色、刷新令牌和审计仍是内存实现，生产缺口由 Task 9.13 负责关闭。
 
 - 自动化状态：`AGENT_VERIFIED`。
 - 外部门禁：`HUMAN_PENDING`（角色矩阵、仓库范围和高风险操作审批人待负责人确认）；`FIELD_PENDING`（真实用户目录、密钥轮换和现场登录验证未执行）。
@@ -764,7 +768,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收:** `HUMAN_CONFIRMED` 前必须由负责人按操作说明走通核心流程；没有人工确认不能标记阶段完成。
 
-**Task 6.4 执行证据（2026-08-25）：** 新增 `Warehouse.Wms.Web` 独立静态 Web 项目，提供工作台、入库、出库、库存/库位、设备任务、盘点、异常中心和 PDA 扫码入口；导航、筛选、库位热力、任务分栏、异常处置入口和 PDA 提交提示均可在无 ERP/PLC 环境下运行。前端脚本只保存页面筛选/最近视图并提交业务操作提示，不包含寄存器、PLC 写入或设备时序。新增 `ManagementWebTests` 检查页面模块、PDA 壳和控制边界；测试通过。
+**Task 6.4 执行证据（2026-08-25）：** 新增 `Warehouse.Wms.Web` 独立静态 Web 项目，提供工作台、入库、出库、库存/库位、设备任务、盘点、异常中心和 PDA 扫码入口；导航、筛选、库位热力、任务分栏、异常处置入口和 PDA 提交提示均可在无 ERP/PLC 环境下运行。前端脚本只保存页面筛选/最近视图并提交业务操作提示，不包含寄存器、PLC 写入或设备时序。新增 `ManagementWebTests` 检查页面模块、PDA 壳和控制边界；测试通过。该结果仍是静态 API 壳，完整登录、业务操作和浏览器闭环由 Task 9.15 验收。
 
 - 自动化状态：`AGENT_VERIFIED`。
 - 外部门禁：`HUMAN_PENDING`（负责人尚未按 [`docs/user-guide.md`](../../../docs/user-guide.md) 完成人工入库、出库、移库、盘点差异、异常和权限流程）；`FIELD_PENDING`（真实设备和现场网络未验证）。
@@ -1226,17 +1230,59 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收：** `AGENT_VERIFIED`；单元/SQL 集成测试证明空事实、零容量、Move 源/目标范围、终态任务和 KPI 结果与现有契约一致；大数据量夹具证明库存余额和流水不被全量实体化；完整 restore/build/test、Docker 迁移、健康检查、`scripts/verify.ps1` 和旧目录保护通过。不得引入存储过程、物化视图或新统计事实表。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
-**执行记录（2026-08-26）：** terra 提交 `f2aa318`，将库存余额数量/重量、库位容量/占用和周期流水按 SQL 投影聚合；任务上下文只读取周期内必要 JSON，库位归属同时支持库位编码和 `LocationId.ToString("D")` GUID，指定仓库的出库按库位、移库按源/目标库位纳入。新增 SQL 命令拦截器断言余额/流水查询含 `SUM`，以及大数据量、Move 源/目标范围、GUID 任务归属回归测试。主代理独立验证：Task 9.11 定向 SQL 测试 5/5 通过；`dotnet restore`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false` 构建 0 警告/0 错误；全量 Unit 148 通过/2 跳过、Integration 75 通过、Device Contract 37 通过；Docker SQL 迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；`scripts/verify.ps1` 通过。旧 `warehouse/` 目录未出现在 tracked diff；该目录当前为未跟踪参考源码，内容变更无法由 Git 历史直接证明，继续保持只读人工审计项。自动化状态：`AGENT_VERIFIED`。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+**执行记录（2026-08-26）：** terra 提交 `f2aa318`，将库存余额数量/重量、库位容量/占用和周期流水按 SQL 投影聚合；任务上下文只读取周期内必要 JSON，库位归属同时支持库位编码和 `LocationId.ToString("D")` GUID，指定仓库的出库按库位、移库按源/目标库位纳入。新增 SQL 命令拦截器断言余额/流水查询含 `SUM`，以及大数据量、Move 源/目标范围、GUID 任务归属回归测试。主代理独立验证：Task 9.11 定向 SQL 测试 5/5 通过；`dotnet restore`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false` 构建 0 警告/0 错误；全量 Unit 148 通过/2 跳过、Integration 75 通过、Device Contract 37 通过；Docker SQL 迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；`scripts/verify.ps1` 通过。旧 `warehouse/` 目录未出现在 tracked diff；该目录当前为未跟踪参考源码，内容变更无法由 Git 历史直接证明，继续保持只读人工审计项。该历史 diff 仅保留为当时的过程记录，从 Task 9.12A 起不再作为完整性证据，统一改用 `docs/legacy-source-manifest.sha256` 和校验脚本。自动化状态：`AGENT_VERIFIED`。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
-### Task 9.12：补齐 API 与 Web 的同源代理配置
+### Task 9.12A：代理路由、配置与安全边界
 
-**前置条件：** Task 8.2 和 Task 9.11 已达到 `AGENT_VERIFIED`；不得连接生产 API、ERP、数据库或 PLC，不得修改旧 `warehouse/`。专项施工计划见 [`docs/superpowers/plans/2026-08-26-api-web-proxy.md`](2026-08-26-api-web-proxy.md)。
+**前置条件：** Task 8.2 和 Task 9.11 已达到 `AGENT_VERIFIED`；先建立 `docs/legacy-source-manifest.sha256` 和 `scripts/verify-legacy-source.ps1`，不得连接生产 API、ERP、数据库或 PLC，不得修改旧 `warehouse/`。专项施工计划见 [`docs/superpowers/plans/2026-08-26-api-web-proxy.md`](2026-08-26-api-web-proxy.md)。
 
-**目标：** 为 `Warehouse.Wms.Web` 增加可配置的同源反向代理，将 `/api/` 和 `/health/` 转发到 API 上游；浏览器继续使用相对路径，开发环境默认指向本机 API，生产环境必须显式配置上游地址。代理只允许白名单路径，不代理静态文件，不改变 API 认证和业务授权。
+**目标：** 使用固定版本 YARP（`2.2.0`）为 `Warehouse.Wms.Web` 增加受信任配置驱动的同源代理。只允许 `/api/{**catch-all}` 和 `/health/api/{**catch-all}`，Web 自身提供 `/health/web/live`，禁止泛化 `/health/` 代理、开放代理和 SPA fallback 截获 API 错误。
 
-**计划范围：** Web 项目代理依赖和启动配置、API 上游配置样例、Web/API 集成测试、前端固定端口检查、开发文档和 README；不修改 API 控制器、业务服务、PLC 协议或数据库模型。
+**必须完成：** 保留 `Authorization`、`Content-Type`、`Accept`、`traceparent`、`X-Correlation-ID`、查询参数、请求体和请求取消信号；支持 multipart/下载；上游不可用返回 502、超时返回 504；禁止 POST/PUT/PATCH/DELETE 自动重试；生产缺失、非法或 loopback 默认上游时启动失败；前端只能使用相对路径。
 
-**验收：** `AGENT_VERIFIED`；代理 GET/POST 保留路径、查询串、请求体、状态码和内容类型；Web 静态文件仍由 Web 提供；缺失/非法上游配置启动失败；相对 `/api` 前端请求在 Web `5055` 通过 API `5054` 成功；完整 build/test、健康检查和质量门禁通过。真实部署域名、TLS、认证网关和现场网络策略继续由 `HUMAN_PENDING`/`FIELD_PENDING` 确认。
+**验收：** `AGENT_VERIFIED`；路由优先级、配置校验、请求头/取消信号、非幂等重试禁用、错误响应和旧系统哈希清单测试通过。
+
+### Task 9.12B：双进程代理集成测试和开发启动验证
+
+**前置条件：** Task 9.12A 达到 `AGENT_VERIFIED`；继续使用旧系统 SHA-256 清单，不得使用固定测试端口。
+
+**目标：** 用 Kestrel 动态端口验证 Web 与临时 API 上游的完整代理闭环，覆盖普通 API、Excel multipart 上传、错误报告下载、API 错误、健康检查分层和 SPA 边界；`5054`/`5055` 只用于开发启动冒烟。
+
+**验收：** `AGENT_VERIFIED`；动态端口集成测试、开发双进程冒烟、完整 restore/build/test、`scripts/verify.ps1` 和旧系统哈希校验通过。真实域名、TLS、认证网关和现场网络策略保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+### Task 9.13：身份、刷新令牌与审计 SQL 持久化
+
+**前置条件：** Task 9.12B 达到 `AGENT_VERIFIED`；不得连接生产数据库、ERP 或 PLC。
+
+**允许修改范围：** `src/Warehouse.Wms.Application/Identity/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、`src/Warehouse.Wms.Api/Program.cs`、身份/审计控制器、EF 迁移、身份单元/SQL 集成测试、`PROJECT_DESIGN.md`、本计划和操作说明；不得修改旧 `warehouse/`。
+
+**必须完成：** 将用户、角色、权限、仓库范围、PBKDF2 哈希参数、刷新令牌摘要/过期/撤销/轮换、账号禁用、高风险二次授权和追加式审计写入 SQL；审计不得提供静默更新/删除；生产 JWT 密钥缺失、过短或等于开发默认值时启动失败。
+
+**测试：** 服务重启后用户/角色仍可登录；重复刷新和旧令牌重放被拒绝；注销和账号禁用立即生效；并发刷新只有一个新令牌有效；高风险授权和审计记录可追溯；生产密钥门禁启动失败；Docker SQL 迁移可重复执行。
+
+**验收：** `AGENT_VERIFIED`；不得以 InMemory 身份/审计实现作为生产完成证据。角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+### Task 9.14：异常工作项与 Excel 导入幂等持久化
+
+**前置条件：** Task 9.13 达到 `AGENT_VERIFIED`；Task 4.5 和 Task 5.1A 的内存实现只能作为测试替身。
+
+**允许修改范围：** `src/Warehouse.Wms.Domain/Exceptions/`、`src/Warehouse.Wms.Application/Exceptions/`、`src/Warehouse.Wms.Application/Import/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、相关 API 控制器、EF 迁移、异常/导入单元与 SQL 集成测试、`PROJECT_DESIGN.md`、本计划和操作说明；不得修改 PLC 时序或旧 `warehouse/`。
+
+**必须完成：** SQL 持久化异常、资源快照、设备观察、处置历史、操作审计和关闭状态；重启恢复未关闭异常，`PhysicalStateUnknown` 保持资源锁定，重复告警只创建一个活动工作项，多人并发处置只有一方成功，异常关闭与任务/资源锁一致。持久化导入来源键、文件 SHA-256、关联入库/出库单和错误报告引用；错误报告可按保留期清理，但幂等记录不可只存内存。
+
+**测试：** 异常重启恢复、未知物理状态锁定、重复告警合并、并发处置冲突、事务回滚；服务重启后重复上传同一文件不重复建单，来源键绑定不同文件被拒绝，错误报告可下载且关联原始导入记录。
+
+**验收：** `AGENT_VERIFIED`；异常和导入记录可跨进程恢复并可审计。真实设备对账和现场处置仍为 `FIELD_PENDING`。
+
+### Task 9.15：Web 真实业务接入与端到端验收
+
+**前置条件：** Task 9.12B、Task 9.13、Task 9.14 达到 `AGENT_VERIFIED`；使用模拟设备网关，不连接真实 PLC。
+
+**允许修改范围：** `src/Warehouse.Wms.Web/wwwroot/`、Web 代理配置、必要的 API 契约适配、`tests/Warehouse.Wms.IntegrationTests/Web/`、Playwright 或等价浏览器测试、`docs/user-guide.md`、`PROJECT_DESIGN.md`、本计划；不得在浏览器实现 PLC 时序或直接写数据库/寄存器。
+
+**必须完成的浏览器闭环：** 登录；创建入库单；收货与托盘绑定；模拟设备上架；查询库存；创建出库单、分配和复核；模拟设备下架并扣减库存；移库；盘点差异审批；异常处置。还必须覆盖权限拒绝、重复点击不重复建单、Token 刷新/退出、API 502/504、`PhysicalStateUnknown` 展示，以及浏览器刷新后从 API/SQL 恢复数据。
+
+**验收：** `AGENT_VERIFIED`；Playwright 或等价浏览器测试通过，测试通过 Web 端口而非直接调用 API；核心业务状态、错误提示和权限行为与 API 契约一致。负责人按操作说明确认页面行为后才可进入 `HUMAN_CONFIRMED`，真实 PLC/现场账实仍为 `FIELD_PENDING`。
 
 ## 十三、阶段门禁和最终标准
 
@@ -1249,6 +1295,9 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - **门禁 E：** 阶段 5-6 在模拟 PLC 下完成入库、出库、移库、盘点、权限和异常闭环。
 - **门禁 F：** 阶段 7.1 的本地恢复演练通过；阶段 7.2 必须 `FIELD_VERIFIED`。
 - **门禁 G：** 阶段 8 集成关闭时，WMS 仍能独立运行。
+- **门禁 H：** Task 9.12A/9.12B 的代理安全边界、分层健康检查、动态端口双进程测试和旧系统哈希校验通过。
+- **门禁 I：** Task 9.13/9.14 的身份、刷新令牌、审计、异常工作项和 Excel 导入幂等已通过 SQL 重启/并发/重放测试；不得以 InMemory 实现替代。
+- **门禁 J：** Task 9.15 的 Web 浏览器端到端核心作业通过；负责人确认前端行为后才进入 `HUMAN_CONFIRMED`，真实 PLC 和账实核对仍需 `FIELD_VERIFIED`。
 
 ### 13.2 第一版完成标准
 
@@ -1260,5 +1309,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 手工和 Excel 入库/出库、复核、移库和盘点差异处理可独立完成；Excel 导入具备模板版本、整批校验、错误报告和幂等。
 - PLC 离线、服务重启、超时和未知结果有可验证恢复路径。
 - 取消、停止、物理状态未知和人工确认均不会错误释放库存或把任务伪装成成功。
+- 身份、刷新令牌、审计、异常工作项和 Excel 导入幂等记录在服务重启后可恢复，并具备并发/重放测试证据。
+- Web 通过同源代理和浏览器端到端测试完成核心仓储作业，不仅是静态页面或 HTML 文本检查。
 - 现场试点、账实核对、回滚演练和负责人签字完成。
-- 旧 `warehouse/` 目录没有被新系统修改。
+- 每次 Task 和最终验收均通过 `docs/legacy-source-manifest.sha256` 的 SHA-256 校验，证明旧 `warehouse/` 目录未被新系统修改。
