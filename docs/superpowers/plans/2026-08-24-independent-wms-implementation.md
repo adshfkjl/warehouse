@@ -1216,6 +1216,8 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** 完成任务上下文库位解析与仓库归属过滤；按任务 ID 最新状态去重，终态任务才进入成功率分母、状态和异常计数；非对象、缺失、非法或跨仓库上下文不猜测，指定仓库时排除无法确定归属任务；补充内存聚合范围、重复历史、未完成任务和 SQL 集成测试。无 SQL 连接时集成场景稳定跳过。
 
+**主代理最终验收（2026-08-26）：** terra 修复 SQL 测试中的非法 `SentToPlc -> Succeeded` 状态迁移，成功任务改为经过 `Executing`；sol 复审无 P0/P1。主代理在 Docker SQL Server（`127.0.0.1:14333`）上独立执行 `dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、`dotnet ef database update --project src/Warehouse.Wms.Infrastructure --startup-project src/Warehouse.Wms.Api` 和 `scripts/verify.ps1`：构建 0 警告/0 错误；Unit 148 通过/2 跳过、Integration 73 通过、Device Contract 37 通过；SQL 统计仓库归属定向测试 1/1 通过；迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；旧 `warehouse/` 保护检查通过。自动化状态更新为 `AGENT_VERIFIED`。大数据量服务端聚合优化另列后续 Task；真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
