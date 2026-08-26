@@ -1218,6 +1218,14 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **主代理最终验收（2026-08-26）：** terra 修复 SQL 测试中的非法 `SentToPlc -> Succeeded` 状态迁移，成功任务改为经过 `Executing`；sol 复审无 P0/P1。主代理在 Docker SQL Server（`127.0.0.1:14333`）上独立执行 `dotnet restore Warehouse.Wms.sln`、`dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false`、`dotnet test Warehouse.Wms.sln --no-build --no-restore`、`dotnet ef database update --project src/Warehouse.Wms.Infrastructure --startup-project src/Warehouse.Wms.Api` 和 `scripts/verify.ps1`：构建 0 警告/0 错误；Unit 148 通过/2 跳过、Integration 73 通过、Device Contract 37 通过；SQL 统计仓库归属定向测试 1/1 通过；迁移无待应用变更；`/health/live` 与 `/health/ready` 返回 200；旧 `warehouse/` 保护检查通过。自动化状态更新为 `AGENT_VERIFIED`。大数据量服务端聚合优化另列后续 Task；真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
+### Task 9.11：统计事实 SQL 聚合优化
+
+**前置条件：** Task 9.10 达到 `AGENT_VERIFIED`；不得连接生产数据库或 PLC，不得修改旧 `warehouse/`、PLC 协议或设备时序。设计规格见 [`docs/superpowers/specs/2026-08-26-statistics-server-aggregation-design.md`](../specs/2026-08-26-statistics-server-aggregation-design.md)，施工计划见 [`docs/superpowers/plans/2026-08-26-statistics-server-aggregation.md`](2026-08-26-statistics-server-aggregation.md)。
+
+**目标：** 将 SQL 统计源中库存余额、库存流水和库位容量等可由 SQL Server 完成的聚合下推到数据库，减少大数据量周期统计的网络和应用内存开销；任务调度上下文因 JSON 解析仍只读取周期内必要字段并在应用层确定仓库归属，最终 KPI、终态任务口径、仓库范围、幂等和失败保留规则保持不变。
+
+**验收：** `AGENT_VERIFIED`；单元/SQL 集成测试证明空事实、零容量、Move 源/目标范围、终态任务和 KPI 结果与现有契约一致；大数据量夹具证明库存余额和流水不被全量实体化；完整 restore/build/test、Docker 迁移、健康检查、`scripts/verify.ps1` 和旧目录保护通过。不得引入存储过程、物化视图或新统计事实表。真实统计阈值、点位映射、设备报警和现场恢复继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
