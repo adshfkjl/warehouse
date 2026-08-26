@@ -42,11 +42,20 @@ public sealed class SqlServerStatisticsSource(IDbContextFactory<WarehouseDbConte
         {
             using var json = System.Text.Json.JsonDocument.Parse(context);
             var root = json.RootElement;
-            var codes = new[] { "SourceLocation", "sourceLocation", "DestinationLocation", "destinationLocation" }.Select(k => root.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
-            var warehouses = codes.Where(c => locations.ContainsKey(c!)).Select(c => locations[c!]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return new TaskStatisticsFact(id, state, updatedAt);
+            var fields = new[] { "SourceLocation", "sourceLocation", "DestinationLocation", "destinationLocation" }
+                .Where(k => root.TryGetProperty(k, out _))
+                .Select(k => root.GetProperty(k))
+                .Where(v => v.ValueKind != System.Text.Json.JsonValueKind.Null)
+                .ToArray();
+            if (fields.Length == 0 || fields.Any(v => v.ValueKind != System.Text.Json.JsonValueKind.String || string.IsNullOrWhiteSpace(v.GetString()))) return new TaskStatisticsFact(id, state, updatedAt);
+            var codes = fields.Select(v => v.GetString()!).ToArray();
+            if (codes.Any(c => !locations.ContainsKey(c))) return new TaskStatisticsFact(id, state, updatedAt);
+            var warehouses = codes.Select(c => locations[c]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             return warehouses.Length == 1 ? new TaskStatisticsFact(id, state, updatedAt, warehouses[0], true) : new TaskStatisticsFact(id, state, updatedAt);
         }
         catch (System.Text.Json.JsonException) { return new TaskStatisticsFact(id, state, updatedAt); }
+        catch (InvalidOperationException) { return new TaskStatisticsFact(id, state, updatedAt); }
     }
 }
 

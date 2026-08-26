@@ -105,6 +105,15 @@ public sealed class StatisticsPointPersistenceTests
             new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start.AddHours(1))], [new LocationStatisticsFact(10, 1)], "WH-01");
         Assert.Equal(100, scoped!.Kpi!.TaskSuccessRatePercent);
         Assert.Single(scoped.TaskStates!);
+
+        var terminalOnly = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [new InventoryStatisticsFact(1, 1, InventoryStatus.Available, null)], [], [
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start),
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Failed, start),
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.Executing, start),
+            new TaskStatisticsFact(Guid.NewGuid(), TaskState.PhysicalStateUnknown, start)], [new LocationStatisticsFact(1, 1)]);
+        Assert.Equal(50, terminalOnly!.Kpi!.TaskSuccessRatePercent);
+        Assert.Equal(1, terminalOnly.Kpi.ExceptionCount);
+        Assert.DoesNotContain(terminalOnly.TaskStates!, x => x.State == nameof(TaskState.Executing));
     }
 
     [Fact]
