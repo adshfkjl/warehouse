@@ -1247,16 +1247,23 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - Modify: `PROJECT_DESIGN.md`
 - Modify: `docs/superpowers/plans/2026-08-24-independent-wms-implementation.md`
 
-- [ ] **Step 1: Define the manifest contract and failing checks.** 清单使用相对 `warehouse/` 根目录的 POSIX 路径，按路径稳定排序并记录 SHA-256；检测文件新增、删除和内容变化；缺少清单、重复路径、非法哈希或格式错误必须失败；校验脚本只能读取和比较，不得自动生成或覆盖清单。
-- [ ] **Step 2: Reject path escapes.** 遍历时拒绝 `ReparsePoint`/符号链接和解析后不在 `warehouse/` 根目录内的路径；只排除路径中明确名为 `bin` 或 `obj` 的生成目录，其他目录和文件不得静默排除。
-- [ ] **Step 3: Implement and test verification.** 新增 PowerShell 校验脚本，返回非零退出码表示清单缺失、文件新增/删除、内容变化、符号链接逃逸或清单格式错误；为每种情况准备隔离临时 fixture，断言脚本不会改写原清单。
-- [ ] **Step 4: Integrate the gate.** 将 `scripts/verify-legacy-source.ps1` 接入 `scripts/verify.ps1`；脚本支持显式 `-ManifestPath` 和 `-LegacyRoot` 参数，默认只读取仓库内固定路径，禁止从浏览器、环境变量或请求参数动态决定根目录。
-- [ ] **Step 5: Establish and qualify the baseline.** 以 `2026-08-27` 作为清单建立日期；首次生成后必须与可信备份或现场原始副本抽样/全量核对。清单只能证明建立基线之后未发生变化，不能倒推证明此前从未被 Agent 修改；无法完成来源核对时标记 `HUMAN_PENDING`，不得宣称历史完整性已证明。
-- [ ] **Step 6: Run verification and record evidence.** 执行 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1`、`pwsh -NoProfile -File scripts/verify-legacy-source.ps1`、`pwsh -NoProfile -File scripts/verify.ps1` 和 `git diff --check`；记录文件数量、哈希结果、来源核对结果和退出码。
+- [x] **Step 1: Define the manifest contract and failing checks.** 清单使用相对 `warehouse/` 根目录的 POSIX 路径，按路径稳定排序并记录 SHA-256；检测文件新增、删除和内容变化；缺少清单、重复路径、非法哈希或格式错误必须失败；校验脚本只能读取和比较，不得自动生成或覆盖清单。
+- [x] **Step 2: Reject path escapes.** 遍历时拒绝 `ReparsePoint`/符号链接和解析后不在 `warehouse/` 根目录内的路径；只排除路径中明确名为 `bin` 或 `obj` 的生成目录，其他目录和文件不得静默排除。
+- [x] **Step 3: Implement and test verification.** 新增 PowerShell 校验脚本，返回非零退出码表示清单缺失、文件新增/删除、内容变化、符号链接逃逸或清单格式错误；为每种情况准备隔离临时 fixture，断言脚本不会改写原清单。
+- [x] **Step 4: Integrate the gate.** 将 `scripts/verify-legacy-source.ps1` 接入 `scripts/verify.ps1`；脚本支持显式 `-ManifestPath` 和 `-LegacyRoot` 参数，默认只读取仓库内固定路径，禁止从浏览器、环境变量或请求参数动态决定根目录。
+- [x] **Step 5: Establish and qualify the baseline.** 以 `2026-08-27` 作为清单建立日期；首次生成后必须与可信备份或现场原始副本抽样/全量核对。清单只能证明建立基线之后未发生变化，不能倒推证明此前从未被 Agent 修改；无法完成来源核对时标记 `HUMAN_PENDING`，不得宣称历史完整性已证明。
+- [x] **Step 6: Run verification and record evidence.** 执行 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1`、`pwsh -NoProfile -File scripts/verify-legacy-source.ps1`、`pwsh -NoProfile -File scripts/verify.ps1` 和 `git diff --check`；记录文件数量、哈希结果、来源核对结果和退出码。
 
 **验收：** `AGENT_VERIFIED`（脚本、排除规则、变化检测和质量门禁通过）；来源副本核对另记录 `HUMAN_PENDING`/`HUMAN_CONFIRMED`。清单缺失或不匹配必须阻断后续 Task，验证脚本不得自动重新生成清单。
 
-**执行记录：** Task 执行后填写清单建立日期、文件计数、测试命令及结果、来源副本核对证据和门禁状态；未执行前状态为 `PENDING`。
+**执行记录（2026-08-27）：**
+
+- 清单以一次性显式动作建立，建立日期为 `2026-08-27`；纳入 133 个文件，排除路径段精确为 `bin` 或 `obj` 的目录。清单自身 SHA-256 为 `11853e679799272b1fd9dc15eb082ac12ff2d41138740822de29cb94f0cfb8cc`。
+- TDD：先运行新增脚本测试，因缺少 `scripts/verify-legacy-source.ps1` 预期失败；加入脚本后发现并修复嵌套路径 POSIX 分隔符比较缺陷。最终 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1` 退出码 0，9/9 通过，覆盖缺失、内容变化、新增、删除、格式错误、重复路径、ReparsePoint/Junction、`bin`/`obj` 排除边界和清单未改写。
+- `pwsh -NoProfile -File scripts/verify-legacy-source.ps1` 退出码 0，133 个文件匹配；`dotnet test tests/Warehouse.Wms.UnitTests/Warehouse.Wms.UnitTests.csproj --filter FullyQualifiedName~QualityGateConfigurationTests --no-restore` 退出码 0，4/4 通过。
+- `pwsh -NoProfile -File scripts/verify.ps1` 已运行：restore、build（0 警告/0 错误）、Unit 149 通过/2 跳过、Integration 50 通过/25 跳过、Device Contract 37 通过、旧源码 133 文件校验和 API 健康检查均通过；Docker daemon 不可用使 SQL 迁移检查按既有规则 `BLOCKED`，脚本退出码 2。不得将其记录为完整质量门禁通过。
+- 来源副本核对：`HUMAN_PENDING`。没有可访问的可信备份或现场原始副本，未宣称基线建立前的历史完整性；旧 `warehouse/` 仅被读取，未修改。
+- 门禁状态：`BLOCKED`（仅因本机 Docker daemon 不可用，SQL 迁移门禁未执行）；源码完整性校验与自动化脚本测试具备 `AGENT_VERIFIED` 证据。启动 Docker daemon 后必须重跑 `pwsh -NoProfile -File scripts/verify.ps1`，取得退出码 0 后才能将本 Task 更新为完整 `AGENT_VERIFIED`。
 
 ### Task 9.12A：代理路由、配置与安全边界
 

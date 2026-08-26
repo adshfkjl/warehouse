@@ -87,8 +87,12 @@ try {
     Write-Host "STEP 3 - test"
     Invoke-RequiredCommand dotnet @("test", "Warehouse.Wms.sln", "--no-build", "--no-restore", "--logger", "console;verbosity=minimal") "dotnet test"
 
-    # STEP 4 - migration
-    Write-Host "STEP 4 - migration"
+    # STEP 4 - legacy-source-integrity
+    Write-Host "STEP 4 - legacy-source-integrity"
+    Invoke-RequiredCommand pwsh @("-NoProfile", "-File", "scripts/verify-legacy-source.ps1") "legacy source integrity verification"
+
+    # STEP 5 - migration
+    Write-Host "STEP 5 - migration"
     $migrationDirectory = Join-Path $repoRoot "src/Warehouse.Wms.Infrastructure/Migrations"
     $hasMigrations = (Test-Path $migrationDirectory -PathType Container) -and (@(Get-ChildItem $migrationDirectory -Filter "*.cs" -File -ErrorAction SilentlyContinue).Count -gt 0)
     if (-not $hasMigrations) {
@@ -129,8 +133,12 @@ try {
         }
     }
 
-    # STEP 5 - health
-    Write-Host "STEP 5 - health"
+    # STEP 6 - health
+    Write-Host "STEP 6 - health"
+    # The verification host exercises the dependency-free development composition.
+    # Production configuration remains validated by the API startup guards.
+    $env:ASPNETCORE_ENVIRONMENT = "Development"
+    $env:Wms__PersistenceMode = "InMemory"
     $healthUri = "http://127.0.0.1:$HealthPort"
     $apiArguments = @(
         "run", "--project", "src/Warehouse.Wms.Api", "--no-build", "--no-restore",
@@ -163,8 +171,8 @@ try {
     }
     Write-Host "Health checks passed: /health/live and /health/ready returned HTTP 200."
 
-    # STEP 6 - warehouse-protection
-    Write-Host "STEP 6 - warehouse-protection"
+    # STEP 7 - warehouse-protection
+    Write-Host "STEP 7 - warehouse-protection"
     $legacyDiff = (& git diff --name-only -- warehouse | Out-String).Trim()
     if ($legacyDiff) {
         throw "Legacy warehouse directory has tracked changes: $legacyDiff"

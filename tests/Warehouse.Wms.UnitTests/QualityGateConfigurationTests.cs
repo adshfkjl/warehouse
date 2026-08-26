@@ -25,7 +25,9 @@ public sealed class QualityGateConfigurationTests
             "Directory.Build.props",
             "docker-compose.dev.yml",
             Path.Combine("docs", "development.md"),
-            Path.Combine("scripts", "verify.ps1")
+            Path.Combine("scripts", "verify.ps1"),
+            Path.Combine("scripts", "verify-legacy-source.ps1"),
+            Path.Combine("docs", "legacy-source-manifest.sha256")
         };
 
         Assert.All(requiredFiles, file => Assert.True(
@@ -43,9 +45,10 @@ public sealed class QualityGateConfigurationTests
             "STEP 1 - restore",
             "STEP 2 - build",
             "STEP 3 - test",
-            "STEP 4 - migration",
-            "STEP 5 - health",
-            "STEP 6 - warehouse-protection"
+            "STEP 4 - legacy-source-integrity",
+            "STEP 5 - migration",
+            "STEP 6 - health",
+            "STEP 7 - warehouse-protection"
         };
         var positions = commands.Select(command => Regex.Match(
             script,
@@ -53,7 +56,9 @@ public sealed class QualityGateConfigurationTests
 
         Assert.DoesNotContain(positions, position => position < 0);
         Assert.True(positions.SequenceEqual(positions.OrderBy(position => position)),
-            "verify.ps1 must run restore, build, test, migration, health, then warehouse protection checks.");
+            "verify.ps1 must run restore, build, test, legacy source integrity, migration, health, then warehouse protection checks.");
+
+        Assert.Contains("verify-legacy-source.ps1", script);
     }
 
     [Fact]
@@ -63,5 +68,15 @@ public sealed class QualityGateConfigurationTests
         var script = File.ReadAllText(Path.Combine(root, "scripts", "verify.ps1"));
 
         Assert.Contains("$hasMigrations = (Test-Path", script);
+    }
+
+    [Fact]
+    public void Verification_script_uses_explicit_development_in_memory_configuration_for_health_check()
+    {
+        var root = FindRepositoryRoot();
+        var script = File.ReadAllText(Path.Combine(root, "scripts", "verify.ps1"));
+
+        Assert.Contains("$env:ASPNETCORE_ENVIRONMENT = \"Development\"", script);
+        Assert.Contains("$env:Wms__PersistenceMode = \"InMemory\"", script);
     }
 }

@@ -33,7 +33,7 @@ dotnet test Warehouse.Wms.sln --no-build --no-restore
 pwsh -File scripts/verify.ps1
 ```
 
-`verify.ps1` 固定按 restore、build、test、迁移检查、健康检查、旧目录保护的顺序执行。编译或测试失败会以退出码 `1` 终止；当前尚无迁移时数据库检查标记为“不适用”并继续健康检查；存在迁移但缺少 Docker、Docker daemon 或 EF CLI 时记录 `BLOCKED`，以退出码 `2` 结束，不能被当作迁移通过。
+`verify.ps1` 固定按 restore、build、test、旧源码 SHA-256 完整性校验、迁移检查、健康检查、旧目录保护的顺序执行。完整性校验固定读取 `docs/legacy-source-manifest.sha256` 和 `warehouse/`，不从浏览器、请求或环境变量决定根目录；缺失或不匹配会以退出码 `1` 阻断，绝不自动生成或覆盖清单。编译或测试失败会以退出码 `1` 终止；当前尚无迁移时数据库检查标记为“不适用”并继续健康检查；存在迁移但缺少 Docker、Docker daemon 或 EF CLI 时记录 `BLOCKED`，以退出码 `2` 结束，不能被当作迁移通过。健康检查显式使用 Development/InMemory 组合，不替代 Production 的 SQL Server 配置门禁。
 
 ## 数据库与迁移
 
