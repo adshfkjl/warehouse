@@ -85,8 +85,8 @@ public sealed class StatisticsPointPersistenceTests
         var request = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1",
             [new InventoryStatisticsFact(12, 24, InventoryStatus.Available, Guid.NewGuid())],
             [new TransactionStatisticsFact(InventoryTransactionType.Increase, 5, start.AddHours(1)), new TransactionStatisticsFact(InventoryTransactionType.Decrease, 2, start.AddHours(2))],
-            [new TaskStatisticsFact(TaskState.Succeeded, start.AddHours(1)), new TaskStatisticsFact(TaskState.Failed, start.AddHours(2))],
-            [new LocationStatisticsFact(10, true), new LocationStatisticsFact(10, false)]);
+            [new TaskStatisticsFact(Guid.NewGuid(), TaskState.Succeeded, start.AddHours(1)), new TaskStatisticsFact(Guid.NewGuid(), TaskState.Failed, start.AddHours(2))],
+            [new LocationStatisticsFact(10, 1), new LocationStatisticsFact(10, 0)]);
         Assert.NotNull(request);
         Assert.Equal(12, request!.Kpi!.InventoryQuantity);
         Assert.Equal(5, request.Kpi.InboundQuantity);
@@ -94,6 +94,9 @@ public sealed class StatisticsPointPersistenceTests
         Assert.Equal(5, request.Kpi.LocationUtilizationPercent);
         Assert.Single(request.Trends!);
         Assert.Contains(request.TaskStates!, x => x.State == nameof(TaskState.Failed) && x.Count == 1);
+        var taskId = Guid.NewGuid();
+        var deduped = StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [new InventoryStatisticsFact(1, 1, InventoryStatus.Available, null)], [], [new TaskStatisticsFact(taskId, TaskState.Executing, start.AddHours(1)), new TaskStatisticsFact(taskId, TaskState.Succeeded, start.AddHours(2))], [new LocationStatisticsFact(10, 1), new LocationStatisticsFact(10, 0)]);
+        Assert.Equal(100, deduped!.Kpi!.TaskSuccessRatePercent);
         Assert.Null(StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [], [], []));
     }
 

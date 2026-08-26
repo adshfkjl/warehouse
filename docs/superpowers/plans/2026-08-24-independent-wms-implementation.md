@@ -1192,6 +1192,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **执行记录（2026-08-26）：** 已完成 SQL 统计批次/趋势/任务状态和点位快照实体、唯一约束及 `StatisticsPointReadModels` 迁移；SQL 模式注册 `SqlServerStatisticsService` 与 `SqlServerPointReadModel`，内存模式保持显式替身；新增可取消、记录异常的 `StatisticsWorkerHostedService`，重复周期安全重放、点位按版本取最高观察并保留物理未知/过期状态。无 `WMS_SQLSERVER_TEST_CONNECTION` 时 SQL 集成测试稳定跳过；Docker SQL 实跑和完整质量门禁由主代理执行，真实统计口径与现场刷新阈值保持 HUMAN/FIELD_PENDING。
 **审查修复（2026-08-26）：** Worker 按 `RunAt` 仅生成已完成周期并注入 `IStatisticsSource`，源不可用时不写入成功批次；点位 QueryAsync 将取消令牌传递至 EF 查询，点位 Upsert 与统计批次写入分别对唯一键及 deadlock 做有限、可取消重试，非唯一数据库异常继续抛出；补充 Worker RunAt/源不可用、取消和 SQL 集成覆盖（无 SQL 时稳定跳过）。
 **统计源补全（2026-08-26）：** 新增 `SqlServerStatisticsSource`，从 WMS 自有 `InventoryBalances`、`InventoryTransactions`、`TaskStateHistories` 和 `Locations` 事实表计算 KPI、趋势、任务状态、异常数量和库位利用率；空事实集返回 `null`，任务成功率无终态时为 0%；SQL 模式仅注册真实源，InMemory/契约模式保留不可用替身；补充非零事实聚合单测和 SQL 集成测试（无 SQL 稳定跳过）。
+**统计口径修正（2026-08-26）：** 任务事实按 `WarehouseTask.Id` 最新状态去重，避免状态迁移重复计数；库位利用率改为有库位库存数量除以库位容量总和，补充重复历史与容量利用率测试。
 
 ## 十三、阶段门禁和最终标准
 
