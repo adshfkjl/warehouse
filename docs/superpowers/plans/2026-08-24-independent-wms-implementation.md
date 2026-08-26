@@ -1258,8 +1258,8 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-27）：**
 
-- 清单以一次性显式动作建立，建立日期为 `2026-08-27`；纳入 133 个文件，排除路径段精确为 `bin` 或 `obj` 的目录。清单自身 SHA-256 为 `11853e679799272b1fd9dc15eb082ac12ff2d41138740822de29cb94f0cfb8cc`。
-- TDD：先运行新增脚本测试，因缺少 `scripts/verify-legacy-source.ps1` 预期失败；加入脚本后发现并修复嵌套路径 POSIX 分隔符比较缺陷。最终 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1` 退出码 0，9/9 通过，覆盖缺失、内容变化、新增、删除、格式错误、重复路径、ReparsePoint/Junction、`bin`/`obj` 排除边界和清单未改写。
+- 清单以一次性显式动作建立，建立日期为 `2026-08-27`；纳入 133 个文件，排除路径段精确为 `bin` 或 `obj` 的目录。审查修复前先逐项确认旧清单内容与当前 133 个文件无新增、删除或内容变化，再以严格 Ordinal 相对路径排序重建；清单自身 SHA-256 为 `4fe59fcac7943e0f7024a3aace674a057d0aa002476f6652a302432902fd0339`。
+- TDD：先运行新增脚本测试，因缺少 `scripts/verify-legacy-source.ps1` 预期失败；加入脚本后发现并修复嵌套路径 POSIX 分隔符比较缺陷。审查修复新增路径排序、乱序拒绝、合法哈希的 `../`/绝对/dot-segment/backslash 路径、ReparsePoint 父路径和失败后清单字节不变回归。最终 `pwsh -NoProfile -File tests/LegacySourceManifest.Tests.ps1` 退出码 0，14/14 通过。
 - `pwsh -NoProfile -File scripts/verify-legacy-source.ps1` 退出码 0，133 个文件匹配；`dotnet test tests/Warehouse.Wms.UnitTests/Warehouse.Wms.UnitTests.csproj --filter FullyQualifiedName~QualityGateConfigurationTests --no-restore` 退出码 0，4/4 通过。
 - `pwsh -NoProfile -File scripts/verify.ps1` 已运行：restore、build（0 警告/0 错误）、Unit 149 通过/2 跳过、Integration 50 通过/25 跳过、Device Contract 37 通过、旧源码 133 文件校验和 API 健康检查均通过；Docker daemon 不可用使 SQL 迁移检查按既有规则 `BLOCKED`，脚本退出码 2。不得将其记录为完整质量门禁通过。
 - 来源副本核对：`HUMAN_PENDING`。没有可访问的可信备份或现场原始副本，未宣称基线建立前的历史完整性；旧 `warehouse/` 仅被读取，未修改。

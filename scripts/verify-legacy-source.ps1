@@ -34,6 +34,26 @@ function Test-ExcludedDirectoryName {
         $Name.Equals('obj', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-ReparsePointInRootPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $current = [System.IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return $true
+        }
+
+        $parent = [System.IO.Directory]::GetParent($current)
+        if ($null -eq $parent -or $parent.FullName -eq $current) {
+            break
+        }
+        $current = $parent.FullName
+    }
+
+    return $false
+}
+
 function Get-LegacyFiles {
     param([Parameter(Mandatory = $true)][string]$Root)
 
@@ -89,6 +109,7 @@ function Read-Manifest {
     }
 
     $entries = @{}
+    $previousPath = $null
     for ($index = 2; $index -lt $lines.Count; $index++) {
         $line = $lines[$index]
         if ($line -notmatch '^([0-9A-Fa-f]{64}) \*(.+)$') {
@@ -104,14 +125,22 @@ function Read-Manifest {
         if ($entries.ContainsKey($relativePath)) {
             throw "Legacy source manifest has duplicate relative path: $relativePath"
         }
+        if ($null -ne $previousPath -and [System.StringComparer]::Ordinal.Compare($previousPath, $relativePath) -ge 0) {
+            throw "Legacy source manifest paths must be in strictly increasing ordinal order at line $($index + 1)."
+        }
 
         $entries[$relativePath] = $hash
+        $previousPath = $relativePath
     }
 
     return $entries
 }
 
 try {
+    if (Test-ReparsePointInRootPath -Path $LegacyRoot) {
+        throw "Legacy source root must not be reached through a reparse point or symbolic link: $LegacyRoot"
+    }
+
     $legacyRootItem = Get-Item -LiteralPath $LegacyRoot -Force -ErrorAction Stop
     if (-not $legacyRootItem.PSIsContainer) {
         throw "Legacy source root is not a directory: $LegacyRoot"
