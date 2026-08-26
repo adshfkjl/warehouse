@@ -19,8 +19,9 @@ public sealed class StatisticsPointSqlPersistenceTests
         using var factory = new PooledFactory(new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(builder.ConnectionString).Options);
         await using (var setup = await factory.CreateDbContextAsync()) await setup.Database.MigrateAsync();
         var statistics = new SqlServerStatisticsService(factory); var start = new DateTimeOffset(2026,8,26,0,0,0,TimeSpan.Zero);
-        var first = await statistics.GenerateAsync(StatisticsPeriod.Day,start,start.AddDays(1),"v1");
-        Assert.Equal(first.BatchId, (await new SqlServerStatisticsService(factory).GenerateAsync(StatisticsPeriod.Day,start,start.AddDays(1),"v1")).BatchId);
+        var request = new StatisticsBatchRequest(StatisticsPeriod.Day, start, start.AddDays(1), "v1", Kpi: new StatisticsKpi(1, 2, 3, 4, 5, 6, 7, 8, 9));
+        var first = await statistics.GenerateAsync(request);
+        Assert.Equal(first.BatchId, (await new SqlServerStatisticsService(factory).GenerateAsync(request)).BatchId);
         var points = new SqlServerPointReadModel(factory); var now=DateTimeOffset.UtcNow;
         await points.UpsertAsync(new WarehousePointSnapshot("WH","Z","A","R",1,"L","PhysicalUnknown","P",null,null,null,0,0,now,2,true,"unknown",null,null));
         Assert.Equal("PhysicalUnknown", Assert.Single(points.Query()).Status);
