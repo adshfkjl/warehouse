@@ -290,6 +290,30 @@ Invoke-Test 'rejects a legacy root reached through a reparse-point parent' {
     }
 }
 
+Invoke-Test 'rejects a legacy root that is itself a reparse point without rewriting the manifest' {
+    $fixture = New-Fixture
+    try {
+        $targetRoot = Join-Path $fixture.Fixture 'target-root'
+        Move-Item -LiteralPath $fixture.LegacyRoot -Destination $targetRoot
+        $linkedRoot = Join-Path $fixture.Fixture 'linked-root'
+        try {
+            New-Item -ItemType SymbolicLink -Path $linkedRoot -Target $targetRoot -ErrorAction Stop | Out-Null
+        }
+        catch {
+            New-Item -ItemType Junction -Path $linkedRoot -Target $targetRoot -ErrorAction Stop | Out-Null
+        }
+        $fixture.LegacyRoot = $linkedRoot
+        Write-Manifest $fixture
+        $before = [System.IO.File]::ReadAllBytes($fixture.ManifestPath)
+        $result = Invoke-Verifier $fixture
+        Assert-True ($result.ExitCode -ne 0) 'A legacy root that is itself a symbolic link or junction must fail verification.'
+        Assert-ManifestUnchanged $before $fixture.ManifestPath 'Verifier must not rewrite manifest when legacy root itself is a reparse point.'
+    }
+    finally {
+        Remove-Item -LiteralPath $fixture.Fixture -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Invoke-Test 'excludes only directories named bin or obj' {
     $fixture = New-Fixture
     try {
@@ -305,9 +329,11 @@ Invoke-Test 'excludes only directories named bin or obj' {
         $excludedChanges = Invoke-Verifier $fixture
         Assert-Equal $excludedChanges.ExitCode 0 "Files below exact bin and obj directory names must be excluded. $($excludedChanges.Output)"
 
+        $before = [System.IO.File]::ReadAllBytes($fixture.ManifestPath)
         Set-Content -LiteralPath (Join-Path $fixture.LegacyRoot 'binary\kept.txt') -Value 'changed' -NoNewline
         $keptChange = Invoke-Verifier $fixture
         Assert-True ($keptChange.ExitCode -ne 0) 'Directory names other than exact bin or obj must not be excluded.'
+        Assert-ManifestUnchanged $before $fixture.ManifestPath 'Verifier must not rewrite manifest after a binary directory file changes.'
     }
     finally {
         Remove-Item -LiteralPath $fixture.Fixture -Recurse -Force -ErrorAction SilentlyContinue
