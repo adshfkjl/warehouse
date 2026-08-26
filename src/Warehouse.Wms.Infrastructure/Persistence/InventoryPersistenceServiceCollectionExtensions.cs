@@ -3,7 +3,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Application.Inventory;
 using Warehouse.Wms.Application.Tasks;
+using Warehouse.Wms.Application.Reports;
 using Warehouse.Wms.Infrastructure.Integrations;
+using Warehouse.Wms.Infrastructure.Reports;
+using Warehouse.Wms.Infrastructure.Warehouse;
+using Warehouse.Wms.Application.Points;
 
 namespace Warehouse.Wms.Infrastructure.Persistence;
 
@@ -29,6 +33,9 @@ public static class InventoryPersistenceServiceCollectionExtensions
         services.AddSingleton<IResourceLockStore>(sp => sp.GetRequiredService<SqlServerTaskPersistenceStore>());
         services.AddSingleton<IBusinessWorkflowStore, SqlServerBusinessWorkflowStore>();
         services.AddSingleton<IIntegrationOutbox, SqlServerIntegrationOutbox>();
+        services.AddSingleton<IStatisticsService, SqlServerStatisticsService>();
+        services.AddSingleton<SqlServerPointReadModel>();
+        services.AddSingleton<IPointReadModel>(sp => sp.GetRequiredService<SqlServerPointReadModel>());
         return services;
     }
 }

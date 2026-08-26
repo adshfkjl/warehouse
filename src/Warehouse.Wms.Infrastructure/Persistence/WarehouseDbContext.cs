@@ -29,6 +29,10 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
     public DbSet<BusinessWorkflowEntity> BusinessWorkflows => Set<BusinessWorkflowEntity>();
     public DbSet<BusinessWorkflowStateHistoryEntity> BusinessWorkflowHistories => Set<BusinessWorkflowStateHistoryEntity>();
     public DbSet<BusinessWorkflowIdempotencyEntity> BusinessWorkflowIdempotency => Set<BusinessWorkflowIdempotencyEntity>();
+    public DbSet<StatisticsBatchEntity> StatisticsBatches => Set<StatisticsBatchEntity>();
+    public DbSet<StatisticsTrendEntity> StatisticsTrends => Set<StatisticsTrendEntity>();
+    public DbSet<StatisticsTaskStateEntity> StatisticsTaskStates => Set<StatisticsTaskStateEntity>();
+    public DbSet<PointSnapshotEntity> PointSnapshots => Set<PointSnapshotEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -311,6 +315,16 @@ public sealed class WarehouseDbContext(DbContextOptions<WarehouseDbContext> opti
             entity.Property(x => x.AggregateKey).HasMaxLength(256);
             entity.HasIndex(x => new { x.Scope, x.Key }).IsUnique();
         });
+
+        modelBuilder.Entity<StatisticsBatchEntity>(entity =>
+        {
+            entity.ToTable("StatisticsBatches"); entity.HasKey(x => x.Id); entity.Property(x => x.BatchId).HasMaxLength(128).IsRequired(); entity.Property(x => x.Period).HasMaxLength(16).IsRequired(); entity.Property(x => x.SourceVersion).HasMaxLength(128).IsRequired(); entity.Property(x => x.WarehouseCode).HasMaxLength(64); entity.Property(x => x.Freshness).HasMaxLength(32).IsRequired();
+            entity.Property(x => x.InventoryQuantity).HasPrecision(18, 3); entity.Property(x => x.InventoryWeightKg).HasPrecision(18, 3); entity.Property(x => x.LocationUtilizationPercent).HasPrecision(18, 3); entity.Property(x => x.InboundQuantity).HasPrecision(18, 3); entity.Property(x => x.OutboundQuantity).HasPrecision(18, 3); entity.Property(x => x.TransferQuantity).HasPrecision(18, 3); entity.Property(x => x.TaskSuccessRatePercent).HasPrecision(18, 3);
+            entity.HasIndex(x => new { x.Period, x.PeriodStart, x.PeriodEnd, x.WarehouseCode }).IsUnique(); entity.HasIndex(x => x.BatchId).IsUnique(); entity.HasMany(x => x.Trends).WithOne().HasForeignKey(x => x.BatchEntityId).OnDelete(DeleteBehavior.Cascade); entity.HasMany(x => x.TaskStates).WithOne().HasForeignKey(x => x.BatchEntityId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<StatisticsTrendEntity>(entity => { entity.ToTable("StatisticsTrends"); entity.HasKey(x => x.Id); entity.Property(x => x.InboundQuantity).HasPrecision(18, 3); entity.Property(x => x.OutboundQuantity).HasPrecision(18, 3); entity.Property(x => x.TransferQuantity).HasPrecision(18, 3); });
+        modelBuilder.Entity<StatisticsTaskStateEntity>(entity => { entity.ToTable("StatisticsTaskStates"); entity.HasKey(x => x.Id); entity.Property(x => x.State).HasMaxLength(64).IsRequired(); });
+        modelBuilder.Entity<PointSnapshotEntity>(entity => { entity.ToTable("PointSnapshots"); entity.HasKey(x => x.Id); entity.Property(x => x.LocationCode).HasMaxLength(64).IsRequired(); entity.Property(x => x.WarehouseCode).HasMaxLength(64).IsRequired(); entity.Property(x => x.Status).HasMaxLength(32).IsRequired(); entity.HasIndex(x => new { x.LocationCode, x.SourceVersion }).IsUnique(); entity.HasIndex(x => x.LocationCode); entity.Property(x => x.Quantity).HasPrecision(18, 3); entity.Property(x => x.WeightKg).HasPrecision(18, 3); });
 
         SeedDevelopmentData(modelBuilder);
     }

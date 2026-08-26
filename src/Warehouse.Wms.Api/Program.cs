@@ -138,7 +138,8 @@ builder.Services.AddScoped<PhysicalResultConfirmationService>();
 builder.Services.AddSingleton<TaskCancellationService>();
 builder.Services.AddSingleton<SpreadsheetImportService>();
 builder.Services.AddSingleton<IReportsReadModel, InMemoryReportsReadModel>();
-builder.Services.AddSingleton<IStatisticsService, InMemoryStatisticsService>();
+if (persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<IStatisticsService, InMemoryStatisticsService>();
 var statisticsPeriod = Enum.TryParse<StatisticsPeriod>(builder.Configuration["Wms:Statistics:Period"], true, out var configuredStatisticsPeriod)
     ? configuredStatisticsPeriod
     : StatisticsPeriod.Day;
@@ -148,11 +149,14 @@ var statisticsSchedule = new StatisticsScheduleOptions(
     builder.Configuration.GetValue("Wms:Statistics:Enabled", true));
 builder.Services.AddSingleton(statisticsSchedule);
 builder.Services.AddSingleton<InMemoryStatisticsScheduler>();
+if (persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
 builder.Services.AddSingleton<IPointReadModel>(_ => new InMemoryPointReadModel([
     new WarehousePointSnapshot("WH-01", "Z1", "A1", "R01", 1, "A1-01-01", "Occupied", "PLT-00128", "MAT-001", "示例物料", "LOT-01", 12, 120, DateTimeOffset.UtcNow.AddSeconds(-20), 1, false, null, "Executing", "LP-01"),
     new WarehousePointSnapshot("WH-01", "Z1", "A1", "R01", 2, "A1-01-02", "Free", null, null, null, null, 0, 0, DateTimeOffset.UtcNow.AddSeconds(-20), 1, false, null, "Idle", null),
     new WarehousePointSnapshot("WH-01", "Z1", "A2", "R02", 2, "A2-02-02", "PhysicalUnknown", "PLT-00117", "MAT-002", "待核对物料", "LOT-02", 1, 10, DateTimeOffset.UtcNow.AddMinutes(-8), 2, true, "设备结果未知", "Unknown", "LP-02")
 ]));
+builder.Services.AddSingleton<StatisticsWorker>(sp => new StatisticsWorker(sp.GetRequiredService<IStatisticsService>(), sp.GetRequiredService<StatisticsScheduleOptions>(), builder.Configuration["Wms:Statistics:SourceVersion"] ?? "wms-v1"));
+builder.Services.AddHostedService<StatisticsWorkerHostedService>();
 builder.Services.AddSingleton<MessagingHealthState>();
 builder.Services.AddSingleton<WarehouseHealthCheckService>();
 builder.Services.AddSingleton<IIntegrationCommandService>(sp =>

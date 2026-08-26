@@ -1170,6 +1170,27 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **执行记录（2026-08-26）：** 已完成 SQL 调度器跨进程并发测试与硬化：新增同设备并发租约唯一提交、不同设备并发提交、物理未知不重试及无 SQL 稳定跳过测试；`SqlServerTaskPersistenceStore` 对任务创建、状态历史和设备租约中的 deadlock、锁超时及唯一键竞争最多重试 3 次并支持取消，版本/业务冲突保持明确抛出；记录 `DeadlockRetryCount` 与 `LockContentionCount` 观测。Docker SQL 实跑：Task 9.8C 定向场景 6/6 通过，完整集成测试 70/70 通过；未配置 `WMS_SQLSERVER_TEST_CONNECTION` 时稳定跳过且不伪造连接。主代理质量门禁 restore/build/test、迁移、健康检查和旧目录保护均通过。自动化状态：`AGENT_VERIFIED`。真实 PLC、生产 SQL 隔离级别和现场账实仍为 `FIELD_PENDING`。
 
+### Task 9.9：统计与点位读模型 SQL 持久化和周期 Worker
+
+**前置条件：** Task 6.6、Task 9.8C 已达到 `AGENT_VERIFIED`；不得连接生产 PLC、生产数据库或 ERP。
+
+**目标：** 将统计批次、统计指标和点位快照从进程内临时状态提升为可重建的 SQL 只读投影，并由可托管的后台 Worker 按小时/日/周/月周期生成；不改变库存、任务或 PLC 的业务所有权。
+
+**允许修改范围：** `src/Warehouse.Wms.Domain/Reports/`、`src/Warehouse.Wms.Domain/Warehouse/`、`src/Warehouse.Wms.Application/Reports/`、`src/Warehouse.Wms.Application/Warehouse/`、`src/Warehouse.Wms.Infrastructure/Reports/`、`src/Warehouse.Wms.Infrastructure/Warehouse/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、`src/Warehouse.Wms.Api/Program.cs`、相关控制器、迁移、单元/集成测试、`PROJECT_DESIGN.md`、本计划和 `docs/user-guide.md`；不得修改 PLC/设备时序或旧 `warehouse/`。
+
+**必须完成：**
+
+- [x] 为统计批次、指标明细、点位快照定义 EF Core 实体、版本/新鲜度字段、来源版本和统计/点位唯一幂等键；迁移可从空库执行。
+- [x] 实现 SQL 读模型仓储和内存测试替身；重复批次安全重放，同周期不同来源版本拒绝，失败不得覆盖最近成功结果。
+- [x] 将统计与点位查询 API 接入 SQL 模式读模型；SQL 模式不得隐式回退到内存，开发/契约模式仍可显式使用内存替身。
+- [x] 增加可取消、可观测的周期 Worker；重启后能继续生成未完成周期，不重复写入已成功批次。
+- [x] 点位快照按 `SourceVersion` 去重，保留 `PhysicalUnknown`、锁定、离线和过期状态；查询只读，不写库存、任务或 PLC。
+- [x] 增加 SQL 并发、幂等、失败保留、重启恢复、权限和 API composition 测试；无 SQL 环境稳定跳过，不伪造连接。
+
+**验收：** `AGENT_VERIFIED`；Docker SQL 空库迁移、统计/点位 SQL 查询、周期 Worker 重启和完整质量门禁通过。真实统计口径、刷新阈值、点位映射和设备报警语义继续保持 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**执行记录（2026-08-26）：** 已完成 SQL 统计批次/趋势/任务状态和点位快照实体、唯一约束及 `StatisticsPointReadModels` 迁移；SQL 模式注册 `SqlServerStatisticsService` 与 `SqlServerPointReadModel`，内存模式保持显式替身；新增可取消、记录异常的 `StatisticsWorkerHostedService`，重复周期安全重放、点位按版本取最高观察并保留物理未知/过期状态。无 `WMS_SQLSERVER_TEST_CONNECTION` 时 SQL 集成测试稳定跳过；Docker SQL 实跑和完整质量门禁由主代理执行，真实统计口径与现场刷新阈值保持 HUMAN/FIELD_PENDING。
+
 ## 十三、阶段门禁和最终标准
 
 ### 13.1 阶段门禁
