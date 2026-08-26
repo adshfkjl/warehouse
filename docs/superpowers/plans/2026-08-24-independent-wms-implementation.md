@@ -1298,6 +1298,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 - 修改 Web 项目、YARP 2.2.0 依赖、代理路由与错误处理、开发/基础配置、代理路由测试、开发说明、README 和本设计书；`wwwroot/app.js` 已验证仅使用同源相对 `/api/...` 路径，无固定端口或动态目标。
 - 定向测试：`dotnet test tests/Warehouse.Wms.IntegrationTests/Warehouse.Wms.IntegrationTests.csproj --filter FullyQualifiedName~FrontendProxyRoutingTests`，19/19 通过；其中 `WebApplicationFactory`/TestServer 请求级测试验证 Web 健康 200、不可达上游的 `/api/...` 与 `/health/api/...` 返回 `application/problem+json` 502 且不回退为 SPA、静态文件/非代理 SPA 路径仍由 Web 响应，以及生产非法协议导致宿主启动失败。Web 构建 `dotnet build src/Warehouse.Wms.Web/Warehouse.Wms.Web.csproj --no-restore`，0 警告/0 错误。
 - 配置门禁：无环境配置启动按预期失败；Development 使用 `http://localhost:5054/` 启动成功；生产缺失、开发默认、非法协议、凭据/查询/片段和 loopback 未显式允许均在启动时拒绝。loopback 判定不做 DNS 解析，覆盖 `localhost` 的大小写/尾点变体及 IPv4/IPv6 loopback；仅 `AllowLoopbackUpstream=true` 允许。代理不读取请求参数，YARP 默认不启用重试；实现为转发错误映射 502/504 问题响应。
+- 后续修复提交 `3d0f9ed` 关闭 `localhost.` loopback 绕过；`e5648e9` 使用 `UseSetting` 在宿主入口读取配置前注入隔离测试上游，并断言生产非法协议错误来源，消除测试对固定 5054 端口的依赖。
 - 未做后续双进程动态端口、请求头/取消、multipart 上传、下载、超时 504 的端到端传输验收，这些保留给 Task 9.12B；未做浏览器业务闭环，保留给 Task 9.15。旧源码清单校验和 `git diff --check` 在提交前执行；自动化门禁状态：`AGENT_VERIFIED`。生产域名/TLS/认证网关及真实现场网络保持 `HUMAN_PENDING`/`FIELD_PENDING`。
 
 ### Task 9.12B：双进程代理集成测试和开发启动验证
