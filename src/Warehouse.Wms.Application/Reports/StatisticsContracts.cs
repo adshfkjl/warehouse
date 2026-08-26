@@ -41,7 +41,8 @@ public sealed record StatisticsSnapshot(
 public sealed record StatisticsScheduleOptions(
     StatisticsPeriod Period = StatisticsPeriod.Day,
     TimeSpan? RunAt = null,
-    bool Enabled = true)
+    bool Enabled = true,
+    string? WarehouseCode = null)
 {
     public TimeSpan EffectiveRunAt => RunAt ?? TimeSpan.FromHours(1);
 }

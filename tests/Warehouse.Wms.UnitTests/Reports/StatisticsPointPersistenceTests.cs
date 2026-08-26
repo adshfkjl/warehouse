@@ -100,6 +100,16 @@ public sealed class StatisticsPointPersistenceTests
         Assert.Null(StatisticsAggregation.Build(StatisticsPeriod.Day, start, start.AddDays(1), "v1", [], [], []));
     }
 
+    [Fact]
+    public async Task Statistics_worker_propagates_configured_warehouse_scope()
+    {
+        var service = new InMemoryStatisticsService();
+        var source = new TestStatisticsSource(new StatisticsKpi(1, 1, 1, 1, 1, 1, 100, 0, 0));
+        var worker = new StatisticsWorker(service, new StatisticsScheduleOptions(StatisticsPeriod.Hour, TimeSpan.Zero, true, "WH-01"), "v1", source);
+        var snapshot = await worker.RunOnceAsync(new DateTimeOffset(2026, 8, 26, 1, 0, 0, TimeSpan.Zero));
+        Assert.Equal("WH-01", snapshot!.WarehouseCode);
+    }
+
     private sealed class TestStatisticsSource(StatisticsKpi? kpi) : IStatisticsSource
     {
         public Task<StatisticsBatchRequest?> BuildAsync(StatisticsPeriod period, DateTimeOffset start, DateTimeOffset end, string sourceVersion, CancellationToken cancellationToken = default)

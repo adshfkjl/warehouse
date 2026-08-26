@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore;
 using Warehouse.Wms.Application.Authorization;
 using Warehouse.Wms.Application.Devices;
 using Warehouse.Wms.Application.Exceptions;
@@ -146,7 +147,8 @@ var statisticsPeriod = Enum.TryParse<StatisticsPeriod>(builder.Configuration["Wm
 var statisticsSchedule = new StatisticsScheduleOptions(
     statisticsPeriod,
     TimeSpan.TryParse(builder.Configuration["Wms:Statistics:RunAt"], out var configuredRunAt) ? configuredRunAt : TimeSpan.FromHours(1),
-    builder.Configuration.GetValue("Wms:Statistics:Enabled", true));
+    builder.Configuration.GetValue("Wms:Statistics:Enabled", true),
+    builder.Configuration["Wms:Statistics:WarehouseCode"]);
 builder.Services.AddSingleton(statisticsSchedule);
 builder.Services.AddSingleton<InMemoryStatisticsScheduler>();
 if (persistenceMode.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
@@ -156,7 +158,7 @@ builder.Services.AddSingleton<IPointReadModel>(_ => new InMemoryPointReadModel([
     new WarehousePointSnapshot("WH-01", "Z1", "A2", "R02", 2, "A2-02-02", "PhysicalUnknown", "PLT-00117", "MAT-002", "待核对物料", "LOT-02", 1, 10, DateTimeOffset.UtcNow.AddMinutes(-8), 2, true, "设备结果未知", "Unknown", "LP-02")
 ]));
 if (persistenceMode.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
-    builder.Services.AddSingleton<IStatisticsSource, SqlServerStatisticsSource>();
+    builder.Services.AddSingleton<IStatisticsSource>(sp => new SqlServerStatisticsSource(sp.GetRequiredService<IDbContextFactory<WarehouseDbContext>>(), builder.Configuration["Wms:Statistics:WarehouseCode"]));
 else
     builder.Services.AddSingleton<IStatisticsSource, UnavailableStatisticsSource>();
 builder.Services.AddSingleton<StatisticsWorker>(sp => new StatisticsWorker(sp.GetRequiredService<IStatisticsService>(), sp.GetRequiredService<StatisticsScheduleOptions>(), builder.Configuration["Wms:Statistics:SourceVersion"] ?? "wms-v1", sp.GetRequiredService<IStatisticsSource>()));
