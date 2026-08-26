@@ -142,7 +142,10 @@ public sealed class FrontendProxyRoutingTests
     {
         using var factory = new ProxyWebApplicationFactory(environmentName: "Production", upstream: "ftp://api.example.test/");
 
-        Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.Contains("absolute HTTP or HTTPS", exception.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("must be configured", exception.ToString(), StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()
@@ -169,10 +172,14 @@ public sealed class FrontendProxyRoutingTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            var configuredUpstream = upstream ?? "http://127.0.0.1:1/";
             builder.UseEnvironment(environmentName);
+            builder.UseSetting("ApiProxy:UpstreamBaseUrl", configuredUpstream);
+            builder.UseSetting("ApiProxy:AllowLoopbackUpstream", "false");
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ApiProxy:UpstreamBaseUrl"] = upstream ?? "http://127.0.0.1:1/"
+                ["ApiProxy:UpstreamBaseUrl"] = configuredUpstream,
+                ["ApiProxy:AllowLoopbackUpstream"] = "false"
             }));
         }
     }
