@@ -1194,6 +1194,7 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **统计源补全（2026-08-26）：** 新增 `SqlServerStatisticsSource`，从 WMS 自有 `InventoryBalances`、`InventoryTransactions`、`TaskStateHistories` 和 `Locations` 事实表计算 KPI、趋势、任务状态、异常数量和库位利用率；空事实集返回 `null`，任务成功率无终态时为 0%；SQL 模式仅注册真实源，InMemory/契约模式保留不可用替身；补充非零事实聚合单测和 SQL 集成测试（无 SQL 稳定跳过）。
 **统计口径修正（2026-08-26）：** 任务事实按 `WarehouseTask.Id` 最新状态去重，避免状态迁移重复计数；库位利用率改为有库位库存数量除以库位容量总和，补充重复历史与容量利用率测试。
 **仓库范围补全（2026-08-26）：** `StatisticsScheduleOptions.WarehouseCode` 支持可配置范围，Worker 写入带范围的批次；`SqlServerStatisticsSource` 按 Location→Rack→Aisle→Zone→Warehouse 关系过滤库存、流水和容量并返回范围，Program 仅 SQL 模式注入真实源；新增 Worker 范围单测。
+**移库范围修复与最终验收（2026-08-26）：** 仓库范围下的 `Move` 流水同时按 `SourceLocationId`/`DestinationLocationId` 过滤，避免 `LocationId` 为空导致移库趋势丢失；Worker 在统计源已带范围时不再无条件覆盖为空。主代理独立验证：`dotnet restore`、`dotnet build` 0 警告/错误；全量测试 Unit 148 通过/2 跳过、Integration 50 通过/22 跳过、Device Contract 37 通过；显式 SQL 连接下报表集成测试 6/6 通过；Docker SQL 迁移已是最新，健康端点均返回 200，`scripts/verify.ps1` 质量门禁通过，`warehouse/` 无 tracked diff。统计终态口径、任务仓库归属和大数据量 SQL 下推聚合保留 `HUMAN_PENDING`/后续 Task。
 
 ## 十三、阶段门禁和最终标准
 
