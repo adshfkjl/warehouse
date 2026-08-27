@@ -95,7 +95,8 @@ public sealed record IdentityAuditEntry(
     string Target,
     bool Succeeded,
     string Reason,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    string CorrelationId);
 
 public interface IAuditLog
 {
@@ -136,7 +137,8 @@ public sealed class InMemoryAuditLog : IAuditLog
                 Require(target, nameof(target)),
                 succeeded,
                 Require(reason, nameof(reason)),
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow,
+                Guid.NewGuid().ToString("N")));
         }
     }
 
@@ -149,6 +151,12 @@ public sealed class InMemoryAuditLog : IAuditLog
 public interface IIdentityService : IRiskAuthorizationService
 {
     IReadOnlyCollection<RoleDefinition> Roles { get; }
+
+    Task<IReadOnlyCollection<RoleDefinition>> GetRolesAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Roles);
+    }
 
     void CreateUser(CreateUserRequest request);
 
@@ -179,12 +187,18 @@ public interface IIdentityService : IRiskAuthorizationService
         return Task.CompletedTask;
     }
 
+    Task CreateUserAsync(CreateUserRequest request, string actorUserId, CancellationToken cancellationToken = default)
+        => CreateUserAsync(request, cancellationToken);
+
     Task CreateRoleAsync(string roleName, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         CreateRole(roleName);
         return Task.CompletedTask;
     }
+
+    Task CreateRoleAsync(string roleName, string actorUserId, CancellationToken cancellationToken = default)
+        => CreateRoleAsync(roleName, cancellationToken);
 
     Task AssignRoleAsync(string userId, string roleName, CancellationToken cancellationToken = default)
     {
@@ -193,12 +207,18 @@ public interface IIdentityService : IRiskAuthorizationService
         return Task.CompletedTask;
     }
 
+    Task AssignRoleAsync(string userId, string roleName, string actorUserId, CancellationToken cancellationToken = default)
+        => AssignRoleAsync(userId, roleName, cancellationToken);
+
     Task GrantPermissionAsync(string roleName, string permission, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         GrantPermission(roleName, permission);
         return Task.CompletedTask;
     }
+
+    Task GrantPermissionAsync(string roleName, string permission, string actorUserId, CancellationToken cancellationToken = default)
+        => GrantPermissionAsync(roleName, permission, cancellationToken);
 
     Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {
@@ -207,10 +227,16 @@ public interface IIdentityService : IRiskAuthorizationService
         return Task.CompletedTask;
     }
 
+    Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, string actorUserId, CancellationToken cancellationToken = default)
+        => ChangePasswordAsync(userId, currentPassword, newPassword, cancellationToken);
+
     Task DisableUserAsync(string userId, string reason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         DisableUser(userId, reason);
         return Task.CompletedTask;
     }
+
+    Task DisableUserAsync(string userId, string reason, string actorUserId, CancellationToken cancellationToken = default)
+        => DisableUserAsync(userId, reason, cancellationToken);
 }

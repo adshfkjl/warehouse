@@ -81,7 +81,7 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         {
             using var db = _contexts.CreateDbContext();
             return db.IdentityAudits.AsNoTracking().OrderBy(x => x.OccurredAt).ThenBy(x => x.Id)
-                .Select(x => new IdentityAuditEntry(x.Action, x.UserId, x.Target, x.Succeeded, x.Reason, x.OccurredAt)).ToArray();
+                .Select(x => new IdentityAuditEntry(x.Action, x.UserId, x.Target, x.Succeeded, x.Reason, x.OccurredAt, x.CorrelationId)).ToArray();
         }
     }
 
@@ -95,32 +95,45 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         }
     }
 
+    public async Task<IReadOnlyCollection<RoleDefinition>> GetRolesAsync(CancellationToken cancellationToken = default)
+    {
+        await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
+        var roles = await db.IdentityRoles.AsNoTracking().Include(x => x.Permissions).ToArrayAsync(cancellationToken);
+        return roles.Select(x => new RoleDefinition(x.Name, x.Permissions.Select(p => p.Permission).ToHashSet(StringComparer.OrdinalIgnoreCase))).ToArray();
+    }
+
     public async Task<IReadOnlyList<IdentityAuditEntry>> GetAuditPageAsync(int skip, int take, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(skip);
         if (take is < 1 or > 500) throw new ArgumentOutOfRangeException(nameof(take));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         return await db.IdentityAudits.AsNoTracking().OrderBy(x => x.OccurredAt).ThenBy(x => x.Id).Skip(skip).Take(take)
-            .Select(x => new IdentityAuditEntry(x.Action, x.UserId, x.Target, x.Succeeded, x.Reason, x.OccurredAt)).ToArrayAsync(cancellationToken);
+            .Select(x => new IdentityAuditEntry(x.Action, x.UserId, x.Target, x.Succeeded, x.Reason, x.OccurredAt, x.CorrelationId)).ToArrayAsync(cancellationToken);
     }
 
-    public void CreateRole(string roleName) => CreateRoleAsync(roleName).GetAwaiter().GetResult();
-    public async Task CreateRoleAsync(string roleName, CancellationToken cancellationToken = default)
+    public void CreateRole(string roleName) => CreateRoleAsync(roleName, AnonymousActor).GetAwaiter().GetResult();
+    public Task CreateRoleAsync(string roleName, CancellationToken cancellationToken = default)
+        => CreateRoleAsync(roleName, AnonymousActor, cancellationToken);
+    public async Task CreateRoleAsync(string roleName, string actorUserId, CancellationToken cancellationToken = default)
     {
         var name = Require(roleName, nameof(roleName));
+        var actor = Require(actorUserId, nameof(actorUserId));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         if (await db.IdentityRoles.AnyAsync(x => x.NormalizedName == Key(name), cancellationToken)) throw new InvalidOperationException($"Role '{name}' already exists.");
         db.IdentityRoles.Add(new IdentityRoleEntity { Id = Guid.NewGuid(), Name = name, NormalizedName = Key(name) });
-        Audit(db, IdentityAuditAction.RoleCreated, AnonymousActor, name, true, "role created");
+        Audit(db, IdentityAuditAction.RoleCreated, actor, name, true, "role created");
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public void CreateUser(CreateUserRequest request) => CreateUserAsync(request).GetAwaiter().GetResult();
-    public async Task CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken = default)
+    public void CreateUser(CreateUserRequest request) => CreateUserAsync(request, AnonymousActor).GetAwaiter().GetResult();
+    public Task CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken = default)
+        => CreateUserAsync(request, AnonymousActor, cancellationToken);
+    public async Task CreateUserAsync(CreateUserRequest request, string actorUserId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var actor = Require(actorUserId, nameof(actorUserId));
         var userId = Require(request.UserId, nameof(request.UserId));
         var displayName = Require(request.DisplayName, nameof(request.DisplayName));
         PasswordHashing.ValidatePassword(request.Password);
@@ -135,14 +148,17 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         db.IdentityUsers.Add(account);
         foreach (var role in roleEntities) db.IdentityUserRoles.Add(new IdentityUserRoleEntity { UserId = account.Id, RoleId = role.Id });
         foreach (var scope in scopes) db.IdentityWarehouseScopes.Add(new IdentityWarehouseScopeEntity { Id = Guid.NewGuid(), UserId = account.Id, WarehouseId = scope, NormalizedWarehouseId = Key(scope) });
-        Audit(db, IdentityAuditAction.UserCreated, AnonymousActor, userId, true, "user created");
+        Audit(db, IdentityAuditAction.UserCreated, actor, userId, true, "user created");
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public void AssignRole(string userId, string roleName) => AssignRoleAsync(userId, roleName).GetAwaiter().GetResult();
-    public async Task AssignRoleAsync(string userId, string roleName, CancellationToken cancellationToken = default)
+    public void AssignRole(string userId, string roleName) => AssignRoleAsync(userId, roleName, AnonymousActor).GetAwaiter().GetResult();
+    public Task AssignRoleAsync(string userId, string roleName, CancellationToken cancellationToken = default)
+        => AssignRoleAsync(userId, roleName, AnonymousActor, cancellationToken);
+    public async Task AssignRoleAsync(string userId, string roleName, string actorUserId, CancellationToken cancellationToken = default)
     {
+        var actor = Require(actorUserId, nameof(actorUserId));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         await AcquireApplicationLockAsync(db, $"WmsIdentityUser:{Key(userId)}", cancellationToken);
@@ -150,21 +166,33 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         var role = await db.IdentityRoles.SingleOrDefaultAsync(x => x.NormalizedName == Key(roleName), cancellationToken) ?? throw new KeyNotFoundException();
         if (!await db.IdentityUserRoles.AnyAsync(x => x.UserId == user.Id && x.RoleId == role.Id, cancellationToken)) db.IdentityUserRoles.Add(new IdentityUserRoleEntity { UserId = user.Id, RoleId = role.Id });
         Invalidate(user); RevokeAll(db, user.Id, Now());
-        Audit(db, IdentityAuditAction.RoleAssigned, user.UserId, role.Name, true, "role assigned");
+        Audit(db, IdentityAuditAction.RoleAssigned, actor, user.UserId, true, $"role assigned: {role.Name}");
         await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
     }
 
-    public void GrantPermission(string roleName, string permission) => GrantPermissionAsync(roleName, permission).GetAwaiter().GetResult();
-    public async Task GrantPermissionAsync(string roleName, string permission, CancellationToken cancellationToken = default)
+    public void GrantPermission(string roleName, string permission) => GrantPermissionAsync(roleName, permission, AnonymousActor).GetAwaiter().GetResult();
+    public Task GrantPermissionAsync(string roleName, string permission, CancellationToken cancellationToken = default)
+        => GrantPermissionAsync(roleName, permission, AnonymousActor, cancellationToken);
+
+    public async Task GrantPermissionAsync(string roleName, string permission, string actorUserId, CancellationToken cancellationToken = default)
     {
         var value = Require(permission, nameof(permission));
+        var actor = Require(actorUserId, nameof(actorUserId));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        await AcquireApplicationLockAsync(db, $"WmsIdentityRole:{Key(roleName)}", cancellationToken);
         var role = await db.IdentityRoles.SingleOrDefaultAsync(x => x.NormalizedName == Key(roleName), cancellationToken) ?? throw new KeyNotFoundException();
+        var userKeys = await db.IdentityUsers
+            .Where(user => db.IdentityUserRoles.Any(link => link.UserId == user.Id && link.RoleId == role.Id))
+            .Select(user => user.NormalizedUserId)
+            .OrderBy(key => key)
+            .ToArrayAsync(cancellationToken);
+        foreach (var userKey in userKeys)
+            await AcquireApplicationLockAsync(db, $"WmsIdentityUser:{userKey}", cancellationToken);
         if (!await db.IdentityRolePermissions.AnyAsync(x => x.RoleId == role.Id && x.NormalizedPermission == Key(value), cancellationToken)) db.IdentityRolePermissions.Add(new IdentityRolePermissionEntity { Id = Guid.NewGuid(), RoleId = role.Id, Permission = value, NormalizedPermission = Key(value) });
         var users = await db.IdentityUsers.Where(user => db.IdentityUserRoles.Any(link => link.UserId == user.Id && link.RoleId == role.Id)).ToArrayAsync(cancellationToken);
         var now = Now(); foreach (var user in users) { Invalidate(user); RevokeAll(db, user.Id, now); }
-        Audit(db, IdentityAuditAction.PermissionGranted, AnonymousActor, role.Name, true, value);
+        Audit(db, IdentityAuditAction.PermissionGranted, actor, role.Name, true, value);
         await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
     }
 
@@ -207,10 +235,16 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         var now = Now();
         var token = await db.IdentityRefreshTokens.SingleAsync(x => x.TokenHash == hash, cancellationToken);
         var user = await db.IdentityUsers.SingleAsync(x => x.Id == token.UserId, cancellationToken);
-        if (token.RevokedAt is not null || token.ExpiresAt <= now || user.Disabled)
+        if (token.RevokedAt is not null)
         {
-            RevokeFamily(db, token.FamilyId, now, token.RevokedAt is not null);
-            Audit(db, IdentityAuditAction.Refresh, user.UserId, user.UserId, false, token.RevokedAt is not null ? "refresh token replay detected" : "invalid refresh token");
+            token.ReuseDetectedAt ??= now;
+            Audit(db, IdentityAuditAction.Refresh, user.UserId, user.UserId, false, "refresh token replay detected");
+            await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken); throw new UnauthorizedAccessException("Invalid refresh token.");
+        }
+        if (token.ExpiresAt <= now || user.Disabled)
+        {
+            RevokeFamily(db, token.FamilyId, now, false);
+            Audit(db, IdentityAuditAction.Refresh, user.UserId, user.UserId, false, "invalid refresh token");
             await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken); throw new UnauthorizedAccessException("Invalid refresh token.");
         }
         var pair = await IssueAsync(db, user, token, cancellationToken); token.RevokedAt = now;
@@ -230,33 +264,39 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
         await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
     }
 
-    public void ChangePassword(string userId, string currentPassword, string newPassword) => ChangePasswordAsync(userId, currentPassword, newPassword).GetAwaiter().GetResult();
-    public async Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default)
+    public void ChangePassword(string userId, string currentPassword, string newPassword) => ChangePasswordAsync(userId, currentPassword, newPassword, userId).GetAwaiter().GetResult();
+    public Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default)
+        => ChangePasswordAsync(userId, currentPassword, newPassword, userId, cancellationToken);
+    public async Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, string actorUserId, CancellationToken cancellationToken = default)
     {
         PasswordHashing.ValidatePassword(newPassword);
+        var actor = Require(actorUserId, nameof(actorUserId));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         await AcquireApplicationLockAsync(db, $"WmsIdentityUser:{Key(userId)}", cancellationToken);
         var user = await UserAsync(db, userId, cancellationToken);
         if (user.Disabled || !PasswordHashing.Verify(currentPassword, user.PasswordHash, out _))
         {
-            Audit(db, IdentityAuditAction.PasswordChanged, user.UserId, user.UserId, false, "current password rejected");
+            Audit(db, IdentityAuditAction.PasswordChanged, actor, user.UserId, false, "current password rejected");
             await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken); throw new UnauthorizedAccessException("Current password is invalid.");
         }
         user.PasswordHash = PasswordHashing.Hash(newPassword); Invalidate(user); RevokeAll(db, user.Id, Now());
-        Audit(db, IdentityAuditAction.PasswordChanged, user.UserId, user.UserId, true, "password changed");
+        Audit(db, IdentityAuditAction.PasswordChanged, actor, user.UserId, true, "password changed");
         await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
     }
 
-    public void DisableUser(string userId, string reason) => DisableUserAsync(userId, reason).GetAwaiter().GetResult();
-    public async Task DisableUserAsync(string userId, string reason, CancellationToken cancellationToken = default)
+    public void DisableUser(string userId, string reason) => DisableUserAsync(userId, reason, AnonymousActor).GetAwaiter().GetResult();
+    public Task DisableUserAsync(string userId, string reason, CancellationToken cancellationToken = default)
+        => DisableUserAsync(userId, reason, AnonymousActor, cancellationToken);
+    public async Task DisableUserAsync(string userId, string reason, string actorUserId, CancellationToken cancellationToken = default)
     {
+        var actor = Require(actorUserId, nameof(actorUserId));
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         await AcquireApplicationLockAsync(db, $"WmsIdentityUser:{Key(userId)}", cancellationToken);
         var user = await UserAsync(db, userId, cancellationToken);
         user.Disabled = true; Invalidate(user); RevokeAll(db, user.Id, Now());
-        Audit(db, IdentityAuditAction.UserDisabled, user.UserId, user.UserId, true, Require(reason, nameof(reason)));
+        Audit(db, IdentityAuditAction.UserDisabled, actor, user.UserId, true, Require(reason, nameof(reason)));
         await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
     }
 
@@ -278,6 +318,7 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
     {
         await using var db = await _contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        await AcquireApplicationLockAsync(db, $"WmsIdentityUser:{Key(user.UserId)}", cancellationToken);
         var account = await db.IdentityUsers.SingleOrDefaultAsync(x => x.NormalizedUserId == Key(user.UserId), cancellationToken);
         var scopes = user is IWarehouseScopedCurrentUser scoped ? scoped.WarehouseIds.Select(Key).ToHashSet(StringComparer.Ordinal) : [];
         var allowed = account is not null && !account.Disabled && scopes.Count > 0
@@ -311,7 +352,8 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
 
     private void RegisterFailure(IdentityUserEntity user, DateTimeOffset now, WarehouseDbContext db)
     {
-        if (user.FirstFailedLoginAt is null || user.FirstFailedLoginAt.Value.Add(_security.FailedLoginWindow) <= now) { user.FailedLoginCount = 0; user.FirstFailedLoginAt = now; }
+        if (user.LockedUntil is not null && user.LockedUntil <= now) { user.FailedLoginCount = 0; user.FirstFailedLoginAt = now; user.LockedUntil = null; }
+        else if (user.FirstFailedLoginAt is null || user.FirstFailedLoginAt.Value.Add(_security.FailedLoginWindow) <= now) { user.FailedLoginCount = 0; user.FirstFailedLoginAt = now; }
         user.FailedLoginCount++;
         if (user.FailedLoginCount >= _security.FailedLoginThreshold && user.LockedUntil is null) { user.LockedUntil = now.Add(_security.LockoutDuration); Audit(db, IdentityAuditAction.AccountLocked, user.UserId, user.UserId, false, "too many invalid credentials"); }
     }
@@ -327,8 +369,8 @@ public sealed class SqlServerIdentityService : IIdentityService, IAuditLog, IIde
     private static void RevokeAll(WarehouseDbContext db, Guid userId, DateTimeOffset now) { foreach (var token in db.IdentityRefreshTokens.Where(x => x.UserId == userId && x.RevokedAt == null)) token.RevokedAt = now; }
     private static void RevokeFamily(WarehouseDbContext db, Guid familyId, DateTimeOffset now, bool replay) { foreach (var token in db.IdentityRefreshTokens.Where(x => x.FamilyId == familyId)) { token.RevokedAt ??= now; if (replay) token.ReuseDetectedAt ??= now; } }
     private static async Task<IdentityUserEntity> UserAsync(WarehouseDbContext db, string userId, CancellationToken cancellationToken) => await db.IdentityUsers.SingleOrDefaultAsync(x => x.NormalizedUserId == Key(userId), cancellationToken) ?? throw new KeyNotFoundException();
-    private static Task<int> AcquireApplicationLockAsync(WarehouseDbContext db, string resource, CancellationToken cancellationToken)
-        => db.Database.ExecuteSqlRawAsync("EXEC sp_getapplock @Resource = {0}, @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 30000", [resource], cancellationToken);
+    private static Task AcquireApplicationLockAsync(WarehouseDbContext db, string resource, CancellationToken cancellationToken)
+        => SqlServerApplicationLock.AcquireAsync(db, resource, cancellationToken: cancellationToken);
     private void Audit(WarehouseDbContext db, IdentityAuditAction action, string actor, string target, bool succeeded, string reason) => db.IdentityAudits.Add(new IdentityAuditEntity { Id = Guid.NewGuid(), Action = action, UserId = Require(actor, nameof(actor)), Target = Require(target, nameof(target)), Succeeded = succeeded, Reason = Require(reason, nameof(reason)), CorrelationId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"), OccurredAt = Now() });
     private DateTimeOffset Now() => _timeProvider.GetUtcNow();
     private static string HashToken(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Require(value, nameof(value)))));

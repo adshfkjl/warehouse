@@ -12,6 +12,7 @@ using Warehouse.Wms.Application.Outbound;
 using Warehouse.Wms.Application.Integrations;
 using Warehouse.Wms.Infrastructure.Integrations;
 using Warehouse.Wms.Infrastructure.Persistence;
+using Warehouse.Wms.Application.Identity;
 
 namespace Warehouse.Wms.IntegrationTests.Composition;
 
@@ -59,6 +60,30 @@ public sealed class ApiCompositionTests : IClassFixture<WebApplicationFactory<Pr
         Assert.IsType<InventoryService>(scope.ServiceProvider.GetRequiredService<InventoryService>());
         Assert.Null(scope.ServiceProvider.GetService<IOutboxMessageStore>());
         Assert.IsType<InMemoryIntegrationOutbox>(scope.ServiceProvider.GetRequiredService<IIntegrationOutbox>());
+    }
+
+    [Fact]
+    public async Task Default_development_identity_composition_preserves_actor_audit_through_the_interface()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var identity = scope.ServiceProvider.GetRequiredService<IIdentityService>();
+        var audit = scope.ServiceProvider.GetRequiredService<IAuditLog>();
+        Assert.IsType<InMemoryIdentityService>(identity);
+        Assert.IsType<InMemoryAuditLog>(audit);
+
+        await identity.CreateRoleAsync("DevReviewer", "admin");
+        await identity.CreateUserAsync(new CreateUserRequest("dev-target", "Development Target", "P@ssw0rd!", ["DevReviewer"], ["WH-01"]), "admin");
+        await identity.AssignRoleAsync("dev-target", "Supervisor", "admin");
+        await identity.GrantPermissionAsync("DevReviewer", "Inventory.Adjust", "admin");
+        await identity.ChangePasswordAsync("dev-target", "P@ssw0rd!", "N3wP@ssw0rd!", "admin");
+        await identity.DisableUserAsync("dev-target", "development test", "admin");
+
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.RoleCreated && entry.UserId == "admin" && entry.Target == "DevReviewer");
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.UserCreated && entry.UserId == "admin" && entry.Target == "dev-target");
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.RoleAssigned && entry.UserId == "admin" && entry.Target == "dev-target" && entry.Reason.Contains("Supervisor", StringComparison.Ordinal));
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.PermissionGranted && entry.UserId == "admin" && entry.Target == "DevReviewer" && entry.Reason.Contains("Inventory.Adjust", StringComparison.Ordinal));
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.PasswordChanged && entry.UserId == "admin" && entry.Target == "dev-target");
+        Assert.Contains(audit.Entries, entry => entry.Action == IdentityAuditAction.UserDisabled && entry.UserId == "admin" && entry.Target == "dev-target");
     }
 
     [SqlServerFact]

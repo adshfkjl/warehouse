@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Warehouse.Wms.Application.Identity;
@@ -39,9 +40,9 @@ public static class IdentityBootstrapCommand
     public static async Task<int> InitializeAsync(DbContextOptions<WarehouseDbContext> options, string username, string password, string warehouse)
     {
         await using var db = new WarehouseDbContext(options);
-        await db.Database.MigrateAsync();
+        await MigrateUnderServerLockAsync(db);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        await db.Database.ExecuteSqlRawAsync("EXEC sp_getapplock @Resource = N'WmsIdentityBootstrap', @LockMode = N'Exclusive', @LockOwner = N'Transaction';");
+        await SqlServerApplicationLock.AcquireAsync(db, "WmsIdentityBootstrap");
         if (await db.IdentityBootstrapMarkers.AnyAsync(x => x.Name == MarkerName) || await db.IdentityUsers.AnyAsync(x => db.IdentityUserRoles.Any(link => link.UserId == x.Id && db.IdentityRoles.Any(role => role.Id == link.RoleId && role.NormalizedName == "ADMIN"))))
         {
             return 1;
@@ -54,13 +55,38 @@ public static class IdentityBootstrapCommand
         db.IdentityUsers.Add(user);
         db.IdentityUserRoles.Add(new IdentityUserRoleEntity { UserId = user.Id, RoleId = admin.Id });
         db.IdentityWarehouseScopes.Add(new IdentityWarehouseScopeEntity { Id = Guid.NewGuid(), UserId = user.Id, WarehouseId = warehouse!, NormalizedWarehouseId = Key(warehouse) });
-        foreach (var permission in new[] { "Stocktaking.ApplyAdjustment", "Task.Cancel", "Exception.Resolve" })
+        foreach (var permission in new[]
+        {
+            "Stocktaking.ApplyAdjustment",
+            "Task.Cancel",
+            "Exception.ConfirmPhysicalResult",
+            "Exception.InventoryCorrection",
+            "Exception.RequestStop",
+            "Task.ManualPhysicalResultConfirmation"
+        })
             db.IdentityRolePermissions.Add(new IdentityRolePermissionEntity { Id = Guid.NewGuid(), RoleId = admin.Id, Permission = permission, NormalizedPermission = Key(permission) });
         db.IdentityAudits.Add(new IdentityAuditEntity { Id = Guid.NewGuid(), Action = IdentityAuditAction.UserCreated, UserId = "bootstrap", Target = username!, Succeeded = true, Reason = "initial administrator created", CorrelationId = Guid.NewGuid().ToString("N"), OccurredAt = DateTimeOffset.UtcNow });
         db.IdentityBootstrapMarkers.Add(new IdentityBootstrapMarkerEntity { Name = MarkerName, CreatedAt = DateTimeOffset.UtcNow });
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
         return 0;
+    }
+
+    private static async Task MigrateUnderServerLockAsync(WarehouseDbContext target)
+    {
+        var targetConnection = target.Database.GetConnectionString()
+            ?? throw new InvalidOperationException("A SQL Server connection string is required for identity bootstrap.");
+        var targetBuilder = new SqlConnectionStringBuilder(targetConnection);
+        if (string.IsNullOrWhiteSpace(targetBuilder.InitialCatalog))
+            throw new InvalidOperationException("The identity bootstrap connection string must specify a database.");
+
+        var masterBuilder = new SqlConnectionStringBuilder(targetConnection) { InitialCatalog = "master" };
+        var masterOptions = new DbContextOptionsBuilder<WarehouseDbContext>().UseSqlServer(masterBuilder.ConnectionString).Options;
+        await using var master = new WarehouseDbContext(masterOptions);
+        await using var transaction = await master.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        await SqlServerApplicationLock.AcquireAsync(master, $"WmsIdentityBootstrapDatabase:{targetBuilder.InitialCatalog}");
+        await target.Database.MigrateAsync();
+        await transaction.CommitAsync();
     }
 
     private static bool TryParse(string[] args, out string? username, out string? warehouse)

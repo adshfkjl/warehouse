@@ -39,6 +39,16 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
     }
 
     public void CreateUser(CreateUserRequest request)
+        => CreateUserCore(request, null);
+
+    public Task CreateUserAsync(CreateUserRequest request, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CreateUserCore(request, Require(actorUserId, nameof(actorUserId)));
+        return Task.CompletedTask;
+    }
+
+    private void CreateUserCore(CreateUserRequest request, string? actorUserId)
     {
         ArgumentNullException.ThrowIfNull(request);
         var userId = Require(request.UserId, nameof(request.UserId));
@@ -57,6 +67,9 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
 
             _users.Add(userId, new UserAccount(userId, displayName, HashPassword(request.Password), roles, warehouses));
         }
+
+        if (actorUserId is not null)
+            _audit.Record(IdentityAuditAction.UserCreated, actorUserId, userId, true, "user created");
     }
 
     public void CreateRole(string roleName)
@@ -69,6 +82,21 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         }
 
         _audit.Record(IdentityAuditAction.RoleCreated, "system", normalized, true, "role created");
+    }
+
+    public Task CreateRoleAsync(string roleName, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var actor = Require(actorUserId, nameof(actorUserId));
+        var normalized = Require(roleName, nameof(roleName));
+        lock (_gate)
+        {
+            if (_roles.ContainsKey(normalized)) throw new InvalidOperationException($"Role '{normalized}' already exists.");
+            _roles.Add(normalized, new RoleDefinitionMutable(normalized));
+        }
+
+        _audit.Record(IdentityAuditAction.RoleCreated, actor, normalized, true, "role created");
+        return Task.CompletedTask;
     }
 
     public void AssignRole(string userId, string roleName)
@@ -87,6 +115,25 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         _audit.Record(IdentityAuditAction.RoleAssigned, normalizedUser, normalizedRole, true, "role assigned");
     }
 
+    public Task AssignRoleAsync(string userId, string roleName, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var actor = Require(actorUserId, nameof(actorUserId));
+        var normalizedUser = Require(userId, nameof(userId));
+        var normalizedRole = Require(roleName, nameof(roleName));
+        lock (_gate)
+        {
+            if (!_users.TryGetValue(normalizedUser, out var user)) throw new KeyNotFoundException($"User '{normalizedUser}' was not found.");
+            if (!_roles.ContainsKey(normalizedRole)) throw new KeyNotFoundException($"Role '{normalizedRole}' was not found.");
+            user.Roles.Add(normalizedRole);
+            user.SecurityVersion++;
+            user.RevokeAllRefreshTokens();
+        }
+
+        _audit.Record(IdentityAuditAction.RoleAssigned, actor, normalizedUser, true, $"role assigned: {normalizedRole}");
+        return Task.CompletedTask;
+    }
+
     public void GrantPermission(string roleName, string permission)
     {
         var normalizedRole = Require(roleName, nameof(roleName));
@@ -95,10 +142,35 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         {
             if (!_roles.TryGetValue(normalizedRole, out var role)) throw new KeyNotFoundException($"Role '{normalizedRole}' was not found.");
             role.Permissions.Add(normalizedPermission);
-            foreach (var account in _users.Values.Where(account => account.Roles.Contains(normalizedRole))) account.SecurityVersion++;
+            foreach (var account in _users.Values.Where(account => account.Roles.Contains(normalizedRole)))
+            {
+                account.SecurityVersion++;
+                account.RevokeAllRefreshTokens();
+            }
         }
 
         _audit.Record(IdentityAuditAction.PermissionGranted, "system", normalizedRole, true, normalizedPermission);
+    }
+
+    public Task GrantPermissionAsync(string roleName, string permission, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var actor = Require(actorUserId, nameof(actorUserId));
+        var normalizedRole = Require(roleName, nameof(roleName));
+        var normalizedPermission = Require(permission, nameof(permission));
+        lock (_gate)
+        {
+            if (!_roles.TryGetValue(normalizedRole, out var role)) throw new KeyNotFoundException($"Role '{normalizedRole}' was not found.");
+            role.Permissions.Add(normalizedPermission);
+            foreach (var account in _users.Values.Where(account => account.Roles.Contains(normalizedRole)))
+            {
+                account.SecurityVersion++;
+                account.RevokeAllRefreshTokens();
+            }
+        }
+
+        _audit.Record(IdentityAuditAction.PermissionGranted, actor, normalizedRole, true, $"permission granted: {normalizedPermission}");
+        return Task.CompletedTask;
     }
 
     public Task<TokenPair> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -128,16 +200,23 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         var tokenHash = HashToken(normalized);
         lock (_gate)
         {
-            var user = _users.Values.FirstOrDefault(candidate => candidate.RefreshTokens.TryGetValue(tokenHash, out _));
-            if (user is null || user.Disabled || !user.RefreshTokens.TryGetValue(tokenHash, out var stored)
+            var user = _users.Values.FirstOrDefault(candidate => candidate.RefreshTokens.ContainsKey(tokenHash));
+            RefreshTokenRecord? stored = user is not null && user.RefreshTokens.TryGetValue(tokenHash, out var found) ? found : null;
+            if (user is null || user.Disabled || stored is null
                 || stored.Revoked || stored.ExpiresAt <= DateTimeOffset.UtcNow)
             {
-                _audit.Record(IdentityAuditAction.Refresh, "unknown", "refresh", false, "invalid refresh token");
+                if (stored is not null && stored.Revoked)
+                {
+                    stored.ReuseDetectedAt ??= DateTimeOffset.UtcNow;
+                    _audit.Record(IdentityAuditAction.Refresh, user?.UserId ?? "unknown", user?.UserId ?? "refresh", false, "refresh token replay detected");
+                }
+                else
+                    _audit.Record(IdentityAuditAction.Refresh, "unknown", "refresh", false, "invalid refresh token");
                 throw new UnauthorizedAccessException("Invalid refresh token.");
             }
 
             stored.Revoked = true;
-            var pair = IssuePair(user);
+            var pair = IssuePair(user, stored);
             _audit.Record(IdentityAuditAction.Refresh, user.UserId, user.UserId, true, "refresh token rotated");
             return Task.FromResult(pair);
         }
@@ -152,7 +231,7 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         {
             var user = _users.Values.FirstOrDefault(candidate => candidate.RefreshTokens.ContainsKey(tokenHash));
             if (user is null) throw new UnauthorizedAccessException("Invalid refresh token.");
-            user.RefreshTokens[tokenHash].Revoked = true;
+            user.RevokeRefreshFamily(user.RefreshTokens[tokenHash].FamilyId);
             _audit.Record(IdentityAuditAction.Logout, user.UserId, user.UserId, true, "logout succeeded");
             return Task.CompletedTask;
         }
@@ -178,6 +257,29 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         _audit.Record(IdentityAuditAction.PasswordChanged, normalized, normalized, true, "password changed");
     }
 
+    public Task ChangePasswordAsync(string userId, string currentPassword, string newPassword, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var actor = Require(actorUserId, nameof(actorUserId));
+        var normalized = Require(userId, nameof(userId));
+        ValidatePassword(newPassword, nameof(newPassword));
+        lock (_gate)
+        {
+            if (!_users.TryGetValue(normalized, out var user) || user.Disabled || !VerifyPassword(currentPassword, user.PasswordHash))
+            {
+                _audit.Record(IdentityAuditAction.PasswordChanged, actor, normalized, false, "current password rejected");
+                throw new UnauthorizedAccessException("Current password is invalid.");
+            }
+
+            user.PasswordHash = HashPassword(newPassword);
+            user.SecurityVersion++;
+            user.RevokeAllRefreshTokens();
+        }
+
+        _audit.Record(IdentityAuditAction.PasswordChanged, actor, normalized, true, "password changed");
+        return Task.CompletedTask;
+    }
+
     public void DisableUser(string userId, string reason)
     {
         var normalized = Require(userId, nameof(userId));
@@ -191,6 +293,24 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         }
 
         _audit.Record(IdentityAuditAction.UserDisabled, normalized, normalized, true, normalizedReason);
+    }
+
+    public Task DisableUserAsync(string userId, string reason, string actorUserId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var actor = Require(actorUserId, nameof(actorUserId));
+        var normalized = Require(userId, nameof(userId));
+        var normalizedReason = Require(reason, nameof(reason));
+        lock (_gate)
+        {
+            if (!_users.TryGetValue(normalized, out var user)) throw new KeyNotFoundException($"User '{normalized}' was not found.");
+            user.Disabled = true;
+            user.SecurityVersion++;
+            user.RevokeAllRefreshTokens();
+        }
+
+        _audit.Record(IdentityAuditAction.UserDisabled, actor, normalized, true, normalizedReason);
+        return Task.CompletedTask;
     }
 
     public AuthenticatedCurrentUser GetCurrentUser(string userId)
@@ -242,13 +362,16 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
     public void RecordDeviceTaskAudit(string userId, string taskNumber, string reason, bool succeeded = true)
         => _audit.Record(IdentityAuditAction.DeviceTask, Require(userId, nameof(userId)), Require(taskNumber, nameof(taskNumber)), succeeded, Require(reason, nameof(reason)));
 
-    private TokenPair IssuePair(UserAccount user)
+    private TokenPair IssuePair(UserAccount user, RefreshTokenRecord? parent = null)
     {
         var now = DateTimeOffset.UtcNow;
         var accessExpires = now.Add(_options.AccessTokenLifetime);
         var refreshExpires = now.Add(_options.RefreshTokenLifetime);
         var refreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
-        user.RefreshTokens[HashToken(refreshToken)] = new RefreshTokenRecord(refreshExpires);
+        var refreshRecord = new RefreshTokenRecord(Guid.NewGuid(), refreshExpires, parent);
+        if (parent is not null)
+            parent.ReplacedByTokenId = refreshRecord.Id;
+        user.RefreshTokens[HashToken(refreshToken)] = refreshRecord;
 
         var claims = new List<Claim>
         {
@@ -261,8 +384,8 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         claims.AddRange(user.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
         claims.AddRange(user.WarehouseIds.Select(warehouse => new Claim("warehouse", warehouse)));
         var credentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey)), SecurityAlgorithms.HmacSha256);
-        var token = new JwtSecurityToken(_options.Issuer, _options.Audience, claims, now.UtcDateTime, accessExpires.UtcDateTime, credentials);
-        return new TokenPair(user.UserId, new JwtSecurityTokenHandler().WriteToken(token), refreshToken, accessExpires, refreshExpires);
+        var jwt = new JwtSecurityToken(_options.Issuer, _options.Audience, claims, now.UtcDateTime, accessExpires.UtcDateTime, credentials);
+        return new TokenPair(user.UserId, new JwtSecurityTokenHandler().WriteToken(jwt), refreshToken, accessExpires, refreshExpires);
     }
 
     private bool HasPermission(UserAccount user, string operation)
@@ -355,11 +478,22 @@ public sealed class InMemoryIdentityService : IIdentityService, IIdentitySecurit
         {
             foreach (var token in RefreshTokens.Values) token.Revoked = true;
         }
+
+        public void RevokeRefreshFamily(Guid familyId)
+        {
+            foreach (var token in RefreshTokens.Values.Where(token => token.FamilyId == familyId))
+                token.Revoked = true;
+        }
     }
 
-    private sealed class RefreshTokenRecord(DateTimeOffset expiresAt)
+    private sealed class RefreshTokenRecord(Guid id, DateTimeOffset expiresAt, RefreshTokenRecord? parent)
     {
+        public Guid Id { get; } = id;
         public DateTimeOffset ExpiresAt { get; } = expiresAt;
+        public Guid FamilyId { get; } = parent?.FamilyId ?? id;
+        public Guid? ParentTokenId { get; } = parent?.Id;
+        public Guid? ReplacedByTokenId { get; set; }
         public bool Revoked { get; set; }
+        public DateTimeOffset? ReuseDetectedAt { get; set; }
     }
 }

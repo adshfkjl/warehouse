@@ -1337,16 +1337,24 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 **允许修改范围：** `src/Warehouse.Wms.Application/Identity/`、`src/Warehouse.Wms.Infrastructure/Persistence/`、`src/Warehouse.Wms.Api/Program.cs`、身份/审计控制器、EF 迁移、身份单元/SQL 集成测试、`PROJECT_DESIGN.md`、本计划和操作说明；不得修改旧 `warehouse/`。
 
 **Files/Test:**
-- Create/Modify: `src/Warehouse.Wms.Application/Identity/`
-- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/IdentityPersistence.cs`
-- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/AuditPersistence.cs`
+- Modify: `src/Warehouse.Wms.Application/Identity/IdentityContracts.cs`
+- Modify: `src/Warehouse.Wms.Application/Identity/InMemoryIdentityService.cs`
+- Modify: `src/Warehouse.Wms.Application/Identity/PasswordHashing.cs`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Persistence/SqlServerIdentityPersistence.cs`
+- Create: `src/Warehouse.Wms.Infrastructure/Persistence/SqlServerApplicationLock.cs`
 - Modify: `src/Warehouse.Wms.Api/Program.cs`
-- Create: `tests/Warehouse.Wms.UnitTests/Identity/IdentityPersistenceTests.cs`
-- Create: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentitySqlPersistenceTests.cs`
-- Create: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentityBootstrapAndCookieTests.cs`
-- Create: `src/Warehouse.Wms.Api/Commands/CreateInitialAdminCommand.cs`
-- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_IdentityAuditPersistence.cs`
-- Create: `src/Warehouse.Wms.Infrastructure/Migrations/20260827_IdentityAuditPersistence.Designer.cs`
+- Modify: `src/Warehouse.Wms.Api/Controllers/UsersController.cs`
+- Modify: `src/Warehouse.Wms.Api/Controllers/RolesController.cs`
+- Create/Modify: `src/Warehouse.Wms.Api/Identity/IdentityBootstrapCommand.cs`
+- Create: `tests/Warehouse.Wms.UnitTests/Identity/PasswordHashingTests.cs`
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Identity/AuthorizationTests.cs`
+- Create: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentityBootstrapProcessTests.cs`
+- Create/Modify: `tests/Warehouse.Wms.IntegrationTests/Identity/IdentityCookieHttpTests.cs`
+- Create/Modify: `tests/Warehouse.Wms.IntegrationTests/Identity/SqlIdentityPersistenceTests.cs`
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Identity/ProductionIdentityCompositionTests.cs`
+- Modify: `tests/Warehouse.Wms.IntegrationTests/Composition/ApiCompositionTests.cs`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Migrations/20260826191243_IdentityAuditPersistence.cs`
+- Create/Modify: `src/Warehouse.Wms.Infrastructure/Migrations/20260826192520_IdentitySecurityHardening.cs`
 - Modify: `src/Warehouse.Wms.Infrastructure/Migrations/WarehouseDbContextModelSnapshot.cs`
 
 **必须完成：** 将用户、角色、权限、仓库范围、PBKDF2 哈希参数、刷新令牌摘要/过期/撤销/轮换、账号禁用、高风险二次授权和追加式审计写入 SQL；审计不得提供静默更新/删除；生产 JWT 密钥缺失、过短或等于开发默认值时启动失败。空数据库只能通过一次性本地管理命令 `dotnet run --project src/Warehouse.Wms.Api -- identity create-admin --username <name>` 创建第一个管理员，密码必须通过安全输入获得；已有管理员时命令拒绝执行，初始化成功后不存在默认账号密码或可重复初始化令牌。
@@ -1364,7 +1372,13 @@ PLC/WCS 不得直接写 WMS 库存或业务单据。库存变化只能由 WMS �
 
 **验收：** `AGENT_VERIFIED`；不得以 InMemory 身份/审计实现作为生产完成证据。角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
 
-**执行记录（2026-08-27）：** SQL 身份实体和两段迁移保存 PBKDF2-SHA256 envelope、安全版本/rowversion、规范化唯一键、登录锁定、令牌 family parent/replaced-by/replay 状态及 actor/target/correlation 审计。`sp_getapplock` 按用户和 refresh 摘要建立统一锁序，真实 SQL 验证 16 并发 refresh 仅一个 successor，refresh 与 disable/改密/角色变更和 login 与 disable 最终均使 access/refresh 失效；`TimeProvider` 锁定重启持久和到期恢复通过。Cookie HTTP 验证不返回 refresh JSON、`HttpOnly; Secure; SameSite=Strict; Path=/api/users`、Origin 拒绝、轮换、无 access logout 清 Cookie 与 `Cache-Control: no-store`。bootstrap 双竞争仅一方成功，永久 marker、Admin 仓库 scope 和三项高风险权限写入同一事务；重定向和 `--password` 均拒绝且不启动 HTTP/Worker。Production 组合拒绝缺失/空白/31 字符/精确开发默认 key，接受含普通 `development` 字样但不同的强 key，并只注册 SQL identity/audit。迁移空库两次执行和 pending model 均已实际验证；审计 trigger 拒绝 SQL UPDATE/DELETE，稳定分页以 occurredAt/Id 排序。自动化状态：`AGENT_VERIFIED`；角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
+**执行记录（2026-08-27）：** SQL 身份实体和两段迁移保存 PBKDF2-SHA256 envelope、安全版本/rowversion、规范化唯一键、登录锁定、令牌 family parent/replaced-by/replay 状态及 actor/target/correlation 审计。`sp_getapplock` 按用户和 refresh 摘要建立统一锁序，真实 SQL 验证 16 并发 refresh 仅一个 successor；旧令牌重放被拒绝并记录 `ReuseDetectedAt`，但因无法区分正常并发与窃取重放，不撤销已成功签发的当前 successor。refresh 与 disable/改密/角色变更和 login 与 disable 最终均使 access/refresh 失效；账号安全变更和注销仍撤销相关令牌或 family；`TimeProvider` 锁定重启持久和到期恢复通过。Cookie HTTP 验证不返回 refresh JSON、`HttpOnly; Secure; SameSite=Strict; Path=/api/users/session`、Origin 拒绝、轮换、无 access logout 清 Cookie 与 `Cache-Control: no-store`。bootstrap 双竞争仅一方成功，永久 marker、Admin 仓库 scope 和六项高风险权限（`Stocktaking.ApplyAdjustment`、`Task.Cancel`、`Exception.ConfirmPhysicalResult`、`Exception.InventoryCorrection`、`Exception.RequestStop`、`Task.ManualPhysicalResultConfirmation`）写入同一事务；重定向和 `--password` 均拒绝且不启动 HTTP/Worker。Production 组合拒绝缺失/空白/31 字符/精确开发默认 key，接受含普通 `development` 字样但不同的强 key，并只注册 SQL identity/audit。迁移空库两次执行和 pending model 均已实际验证；审计 trigger 拒绝 SQL UPDATE/DELETE，稳定分页以 occurredAt/Id 排序。自动化状态：`AGENT_VERIFIED`；角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**补充执行记录（2026-08-27，本轮复审修复）：** InMemory 身份服务显式实现 actor-aware 创建用户/角色、角色分配、权限授予、改密和禁用异步重载，避免接口默认实现吞掉调用者身份；审计统一保留真实 actor、受影响用户或角色 target 和可追溯 reason。新增接口分派服务级回归覆盖管理员执行上述身份变更及管理员代改/用户自助改密。定向 `AuthorizationTests` 为 8/8，通过 `dotnet build Warehouse.Wms.sln --no-restore -m:1 -nodeReuse:false` 为 0 警告、0 错误；最终全量门禁由主代理另行执行和记录。
+
+**最终验收记录（2026-08-27）：** 修正 InMemory 注销语义，命中已轮换 refresh token 时按 `FamilyId` 撤销整个 token family，并新增旧 token 注销后 successor 不可继续刷新的回归测试。解决方案构建 0 警告/0 错误；`AuthorizationTests` 11/11；SQL 身份持久化 18/18、Cookie HTTP 6/6、bootstrap 1/1、Production 组合 5/5；Docker SQL 全量集成测试 148/148，设备契约测试 37/37，单元测试 156 通过/2 跳过。`scripts/verify.ps1` 退出码 0，迁移重复执行无待迁移项，健康检查 live/ready 均 HTTP 200，旧源码清单 133/133，旧 `warehouse/` Git diff 为空，`git diff --check` 通过。sol 规格与质量复审无 Critical/Important；SQL replay 字段直接数据库断言和六项 bootstrap 权限精确集合仍列为 Minor 测试增强项。自动化状态：`AGENT_VERIFIED`；角色矩阵、密钥轮换和现场登录继续 `HUMAN_PENDING`/`FIELD_PENDING`。
+
+**补充执行记录（2026-08-27，本轮 InMemory 令牌复审修复）：** InMemory refresh 记录补齐 family、parent、replaced-by 与 `ReuseDetectedAt` 状态；旧令牌重放被拒绝并记为 replay，已成功签发的 successor 仍可继续轮换。actor-aware 权限授予与同步兼容路径均提升受影响用户安全版本并撤销其 refresh tokens。新增重放 successor 和权限变更撤销回归，定向测试 2/2 通过；最终全量门禁由主代理另行执行和记录。
 
 ### Task 9.14：异常工作项与 Excel 导入幂等持久化
 

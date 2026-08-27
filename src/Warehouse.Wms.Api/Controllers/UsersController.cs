@@ -21,7 +21,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
     }
 
     [AllowAnonymous]
-    [HttpPost("refresh")]
+    [HttpPost("session/refresh")]
     public async Task<ActionResult<AccessTokenResponse>> Refresh(CancellationToken cancellationToken)
     {
         EnsureSameOrigin();
@@ -33,11 +33,11 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
     }
 
     [AllowAnonymous]
-    [HttpPost("logout")]
+    [HttpPost("session/logout")]
     public async Task<IActionResult> Logout(CancellationToken cancellationToken)
     {
-        DeleteRefreshCookie();
         EnsureSameOrigin();
+        DeleteRefreshCookie();
         var refreshToken = Request.Cookies[RefreshCookieName];
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
@@ -52,7 +52,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create(CreateUserRequest request, CancellationToken cancellationToken)
     {
-        await _identity.CreateUserAsync(request, cancellationToken);
+        await _identity.CreateUserAsync(request, ActorUserId(), cancellationToken);
         return Accepted(new { request.UserId });
     }
 
@@ -60,7 +60,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
     [HttpPost("{userId}/disable")]
     public async Task<IActionResult> Disable(string userId, DisableUserRequest request, CancellationToken cancellationToken)
     {
-        await _identity.DisableUserAsync(userId, request.Reason, cancellationToken);
+        await _identity.DisableUserAsync(userId, request.Reason, ActorUserId(), cancellationToken);
         return NoContent();
     }
 
@@ -72,7 +72,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
         if (!string.Equals(currentUserId, userId, StringComparison.OrdinalIgnoreCase) && !User.IsInRole("Admin"))
             return Forbid();
 
-        await _identity.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword, cancellationToken);
+        await _identity.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword, ActorUserId(), cancellationToken);
         return NoContent();
     }
 
@@ -84,7 +84,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Path = "/api/users",
+            Path = "/api/users/session",
             Expires = tokens.RefreshTokenExpiresAt
         });
 
@@ -94,7 +94,7 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Path = "/api/users"
+            Path = "/api/users/session"
         });
 
     private void EnsureSameOrigin()
@@ -105,6 +105,10 @@ public sealed class UsersController(IIdentityService identity) : ControllerBase
         if (!string.Equals(origin, expected, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Cross-origin credential request is not allowed.");
     }
+
+    private string ActorUserId()
+        => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? throw new UnauthorizedAccessException("Authenticated user identifier is required.");
 }
 
 public sealed record DisableUserRequest(string Reason);
